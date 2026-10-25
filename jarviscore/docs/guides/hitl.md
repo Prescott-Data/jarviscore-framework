@@ -278,6 +278,13 @@ marked as done. See
 These approvals need a started, Redis-backed Mesh; without durable workflow
 state the action is refused with `APPROVAL_UNAVAILABLE`.
 
+Where the control policy has [grounding](../concepts/control-and-evidence.md#grounding)
+rules (a payment's IBAN must be the one on the supplier record, say), the action
+is previewed before anyone is asked. One strict policy would refuse is never put
+to a person (`POLICY_WOULD_REFUSE`); otherwise the request's `payload.checks`
+shows what was checked and which records the values came from, for your review
+surface to display next to the action.
+
 ### Who may approve
 
 Which actions need a person is the institution's decision. An integration's own

@@ -82,6 +82,20 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 - **Retries do not repeat a payment.** Mutations to Stripe, Adyen, Mollie,
   GoCardless, Checkout.com and PayPal carry the operation's id as their
   idempotency key.
+- **Grounding: a payment's account and amount come from the system of record.**
+  `grounding:` rules in the control policy name, for an operation, which request
+  fields must equal, be one of, or be at most fields of records the broker itself
+  read in the same workflow, following relationships (this invoice's supplier,
+  not any supplier). Typed comparison (IBAN, money, email, text), refusal of
+  ambiguity and of records the run itself changed, selectors pinned to the
+  caller's input, optional re-read before acting, and every grounded call citing
+  the journal event of each read it relied on, checked by `jarviscore verify`.
+  See [Grounding](concepts/control-and-evidence.md#grounding).
+- **Nobody is asked to approve what policy will refuse.** Where a grounding rule
+  could apply, a consequential action is previewed before a person is asked: its
+  code runs with every change held at the broker after the decision. A change
+  strict policy refuses returns `POLICY_WOULD_REFUSE` without asking anyone; the
+  approval request otherwise carries what was checked (`payload.checks`).
 
 ### Changed
 

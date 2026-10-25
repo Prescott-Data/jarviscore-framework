@@ -80,7 +80,29 @@ def _same_binding(record: dict[str, Any], action: HITLAction) -> bool:
         return False
 
 
-def _ask(store, workflow_id: str, step_id: str, action: HITLAction, requirement) -> dict[str, Any]:
+def _asks_again(record: Optional[dict], action: HITLAction) -> bool:
+    """Whether ``gate`` puts ``action`` to a person, given the record on file."""
+    outcome = (record or {}).get("outcome")
+    return (
+        record is None
+        or (isinstance(outcome, dict) and outcome.get("status") == "not_performed")
+        or (not isinstance(outcome, dict) and not _same_binding(record, action))
+    )
+
+
+def asked(store, workflow_id: str, step_id: str, action: HITLAction) -> bool:
+    """Whether ``action`` is already before a person, decided, or done, so ``gate`` will not ask."""
+    lookup = getattr(store, "get_hitl_request", None)
+    if not _durable(store, workflow_id, step_id) or not callable(lookup):
+        return False
+    try:
+        record = lookup(workflow_id, step_id, action.action_id)
+    except Exception:  # noqa: BLE001 - unknown means ask as usual
+        return False
+    return not _asks_again(record if isinstance(record, dict) else None, action)
+
+
+def _ask(store, workflow_id: str, step_id: str, action: HITLAction, requirement, checks=None) -> dict[str, Any]:
     from jarviscore.auth.principal import acting_for
 
     requester = acting_for.get() or ""
@@ -95,6 +117,8 @@ def _ask(store, workflow_id: str, step_id: str, action: HITLAction, requirement)
             "binding": action.binding_digest(),
             "requester": requester,
             **({"requirement": requirement.as_record()} if requirement is not None else {}),
+            # What policy found when the action was previewed (grounding against records).
+            **({"checks": checks} if checks else {}),
         },
     )
     store.create_hitl_request_typed(request)
@@ -106,6 +130,7 @@ def _ask(store, workflow_id: str, step_id: str, action: HITLAction, requirement)
         "consequence": action.consequence,
         "requester": requester,
         "requirement": requirement.as_record() if requirement is not None else None,
+        **({"checks": checks} if checks else {}),
     })
     return _waiting(action, request.request_id, workflow_id, step_id)
 
@@ -117,6 +142,7 @@ def gate(
     action: HITLAction,
     requirement=None,
     directory: Optional[Mapping[str, Any]] = None,
+    checks: Optional[list] = None,
 ) -> dict[str, Any] | None:
     """None when a person approved exactly ``action``, may approve it, and it is now claimed to run.
 
@@ -136,14 +162,10 @@ def gate(
         }
     record = store.get_hitl_request(workflow_id, step_id, action.action_id)
     outcome = (record or {}).get("outcome")
-    if (
-        record is None
-        or (isinstance(outcome, dict) and outcome.get("status") == "not_performed")
-        or (not isinstance(outcome, dict) and not _same_binding(record, action))
-    ):
+    if _asks_again(record, action):
         # An approval that could not be carried out leaves the action undecided, and
         # one given for other arguments does not cover these: the person decides again.
-        return _ask(store, workflow_id, step_id, action, requirement)
+        return _ask(store, workflow_id, step_id, action, requirement, checks)
     resolution = HITLResolution.from_raw(record)
     if resolution is not None and resolution.is_rejected:
         return {

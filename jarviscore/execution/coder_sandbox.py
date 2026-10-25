@@ -1105,6 +1105,8 @@ class CoderSandbox:
                             "action_id": grant.get("action_id"),
                             "approval_required": grant.get("approval_required"),
                             "approval": grant.get("approval"),
+                            # Parent-side list a preview's decisions are noted in.
+                            "preview": grant.get("preview"),
                         }
                         call = self._recording_nexus_call(
                             lambda method, url, **kwargs: self._nexus_call_proxy.call(

@@ -1374,6 +1374,7 @@ capability; if one fails, report what failed.
                 # The approval this run of the atom carries, checked by the broker.
                 "approval_required": bool(required),
                 "approval": binding,
+                "preview": kwargs.get("_preview"),
             }
             exec_context["_atom_authority"] = {
                 **grant,
@@ -2294,6 +2295,28 @@ capability; if one fails, report what failed.
                 description=atom.describe(),
                 consequence=atom.policy.consequence or atom.describe(),
             ) if requirement.required else None
+            checks = None
+            if pending is not None and not approval.asked(
+                self.redis_store,
+                self._run_context.get("workflow_id"),
+                self._run_context.get("step_id"),
+                pending,
+            ):
+                checks = await self._preview_effect(atom, params, action_id, code, pending, policy)
+                refused = [c for c in checks or () if c["outcome"] == "deny" and c["enforced"]]
+                if refused:
+                    # Nobody is asked to approve what policy will refuse when it runs.
+                    return {
+                        "status": "error",
+                        "error": (
+                            f"{name} was not sent for approval: policy refuses it "
+                            f"({'; '.join(c['reason'] for c in refused)}). Only values on "
+                            "record can be sent; if those are not what the task asks for, "
+                            "report that instead."
+                        ),
+                        "semantic_error": "POLICY_WOULD_REFUSE",
+                        "performed": False,
+                    }
             if pending is not None:
                 refusal = approval.gate(
                     self.redis_store,
@@ -2302,6 +2325,7 @@ capability; if one fails, report what failed.
                     pending,
                     requirement=requirement,
                     directory=policy.principals,
+                    checks=checks,
                 )
                 if refusal is not None:
                     return refusal
@@ -2354,6 +2378,37 @@ capability; if one fails, report what failed.
             return result
         call.__name__ = name
         return call
+
+    async def _preview_effect(self, atom, params, action_id, code, pending, policy):
+        """What policy decides on each change this action would make, without making it.
+
+        Runs the atom's own code with every change held at the broker, after its
+        decision and before anything leaves; reads run as they would. Only when a
+        grounding rule could apply to its system: otherwise the decision depends on
+        nothing a preview can see that the approval request does not already show.
+        """
+        from jarviscore.control.grounding import rules_for
+
+        if not rules_for(policy.grounding, atom.system):
+            return None
+        from jarviscore.execution.atom_contract import invocation, shipped_source
+
+        decisions: List[Dict[str, Any]] = []
+        self._run_context["_nexus_connection_id"] = self._connection_handle(atom.system)
+        self._run_context["_nexus_provider"] = atom.system
+        try:
+            await self._tool_execute_code(
+                code=f"{code}\n\n{invocation(atom, params)}",
+                description=f"preview {atom.name} via {atom.system}",
+                _internal_atom=(atom, action_id),
+                _shipped_atom=(atom, params) if shipped_source(atom) == code else None,
+                # Decided as it will be once approved; the approval is what is being asked.
+                _approval=(True, pending.binding_digest()),
+                _preview=decisions,
+            )
+        except Exception as exc:  # noqa: BLE001 - a preview that fails changes nothing
+            logger.info("Preview of %s did not complete: %s", atom.name, exc)
+        return decisions
 
     async def _guard_refusal(self, atom, params: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Application guards may refuse a consequential atom; they can never allow one."""

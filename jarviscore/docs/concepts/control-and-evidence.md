@@ -166,9 +166,75 @@ assurance, how they were authenticated), `approval.refused`, `approval.claim`,
 
 ---
 
+## Grounding
+
+An approval asks a person. Grounding asks the system of record. For an operation
+such as a payment, the deployment names which fields of the request leaving for
+the provider must come from records the broker itself read earlier in the same
+workflow. The model chooses the call; it cannot choose those values. An IBAN
+planted in an invoice's notes, a "we changed banks" email in the task, or a person
+who approves without reading: the payment still goes only to the account on the
+supplier record.
+
+```yaml
+grounding:
+  - name: supplier-payment
+    match: {provider: erp, method: POST, path: /payments}
+    bind:                                   # follow records, in order
+      - name: invoice
+        read: {provider: erp, path: "/invoices/{id}"}
+        where: {id: request.json.invoice}   # which invoice this call pays
+      - name: supplier
+        read: {provider: erp, path: "/suppliers/{id}"}
+        where: {id: invoice.supplier_id}    # that invoice's supplier, not any supplier
+    require:
+      - {field: request.json.iban, equals: supplier.iban, as: iban}
+      - {field: request.json.amount, at_most: invoice.amount_due, as: money}
+    other_fields: deny                      # nothing else rides along
+```
+
+| Property | How |
+|---|---|
+| Sources are what the broker received | Only provider responses the broker recorded count; code cannot hand it a record |
+| Relationships, not membership | A binding selects one record, and the next follows it; a value seen elsewhere in the run proves nothing |
+| What leaves is what is checked | The body httpx will send (`content` over `data` over `json`); a body grounding cannot read is refused |
+| Typed comparison | `iban` (ISO 13616, check digits), `money` and `number` (decimal), `email` (IDNA domain), `text` (exact after NFC, never case- or lookalike-folded), `id`, `exact` |
+| Ambiguity is refused | Two records answering one selector, a field sent twice, a field missing |
+| What the run changed is not a source | A record read after this workflow wrote to it grounds nothing |
+| Which record can be pinned | `selectors_from: [input]` takes selectors only from the caller's structured input (`execute_goal(context=...)`), never from the request |
+| Fresh at the moment of acting | `fresh: reread` reads each record again just before the call; `max_age_seconds` bounds how old a read may be |
+| Every grounded call cites its reads | The decision records each record it relied on (the journal event of that response and its digest); `jarviscore verify` checks every citation |
+
+**Before a person is asked.** When a grounding rule could apply, the action is
+previewed first: the integration's own code runs with every change held at the
+broker after its decision, before anything leaves (reads run as usual). If strict
+policy would refuse it, nobody is asked and the agent gets `POLICY_WOULD_REFUSE`
+with the reasons. Otherwise the approval request carries what was checked
+(`payload.checks`: each change, its decision, and the records it was grounded on),
+so the person sees, for example, that the IBAN is the one on the supplier record.
+Each previewed change is journaled as `policy.preview`, and `jarviscore verify`
+counts those refused before approval. The check at the moment of sending still
+decides.
+
+Relations: `equals`, `one_of` (a list, or a path with `[*]`) and `at_most`
+(`money` or `number`). A refusal names every requirement that failed. A rule that
+cannot be read refuses the calls it matches; one whose `match` cannot be read
+refuses every call. Values are recorded as digests, never in clear.
+
+What grounding does not do: make a system of record correct. A supplier record an
+attacker already changed is still the record. Unless selectors come from the
+caller's input, the model still chooses which invoice, within what the records
+allow. Records are kept per process, so a workflow whose read and payment run in
+different processes is refused (fail closed).
+
+---
+
 ## Performance
 
-Deciding and recording adds about 0.1 ms to a provider call. Provider calls now
+Deciding and recording adds about 0.1 ms to a provider call. Grounding costs
+nothing when no rule applies: responses are kept only when they can ground a rule.
+Where one does, the preview before an approval runs the integration once more in
+the sandbox with its changes held (about 0.5 s measured), once per action. Provider calls now
 reuse their connection (`NEXUS_KEEPALIVE_SECONDS`, default 120): on a measured
 HTTPS endpoint a call went from about 500 ms with a fresh connection to about
 90 ms on a kept one.
@@ -179,5 +245,4 @@ HTTPS endpoint a call went from about 500 ms with a fresh connection to about
 
 Effects that do not go through a provider call are not decided on here yet:
 workspace files and processes, the browser, memory, and messages between agents.
-Typed limits on arguments and signed, witnessed checkpoints come next, each with
-its own claim and tests.
+Signed, witnessed checkpoints come next, each with its own claim and tests.

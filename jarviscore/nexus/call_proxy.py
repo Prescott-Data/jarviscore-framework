@@ -104,33 +104,31 @@ def _with_idempotency_key(provider: str, method: str, headers, authority) -> Opt
     return {**(headers or {}), name: str(operation)[:64]}
 
 
-def _run_name(authority: Optional[Dict[str, Any]]) -> str:
-    """The journal run a call belongs to: its workflow step, or the workflow, or this process."""
-    authority = authority or {}
-    workflow, step = authority.get("workflow_id"), authority.get("step_id")
+def _workflow_of(authority: Optional[Dict[str, Any]]) -> str:
+    """The workflow a call belongs to, or this process when it belongs to none."""
+    workflow = (authority or {}).get("workflow_id")
     if not workflow:
         from jarviscore.orchestration.budget import current_workflow_budget
 
         account = current_workflow_budget()
         workflow = getattr(account, "workflow_id", None)
     if workflow:
-        return f"{workflow}/{step}" if step else str(workflow)
+        return str(workflow)
     import os
 
     return f"process-{os.getpid()}"
 
 
-def _decide(provider: str, method: str, url: str, authority: Optional[Dict[str, Any]]):
-    """Decide on a call before any I/O, and record the decision. Returns (call_id, run, journal)."""
-    from jarviscore.control.operations import describe
-    from jarviscore.control.policy import PolicyDenied, ProviderCall, current_policy
-    from jarviscore.evidence.journal import current_journal
+def _run_name(authority: Optional[Dict[str, Any]]) -> str:
+    """The journal run a call belongs to: its workflow step, or the workflow, or this process."""
+    workflow, step = _workflow_of(authority), (authority or {}).get("step_id")
+    return f"{workflow}/{step}" if step and not workflow.startswith("process-") else workflow
 
-    policy = current_policy()
-    if policy.mode == "off":
-        return None, None, None, False
-    authority = authority or {}
-    call = ProviderCall(
+
+def _provider_call(provider: str, method: str, url: str, authority: Dict[str, Any], grounding=None):
+    from jarviscore.control.policy import ProviderCall
+
+    return ProviderCall(
         provider=provider,
         method=method.upper(),
         url=url,
@@ -141,7 +139,44 @@ def _decide(provider: str, method: str, url: str, authority: Optional[Dict[str, 
         action_id=authority.get("action_id"),
         approval_required=bool(authority.get("approval_required")),
         approval=authority.get("approval"),
+        grounding=grounding,
     )
+
+
+def _preview(provider: str, method: str, url: str, authority: Dict[str, Any], grounding) -> None:
+    """Decide on a change without making it: note the decision for the caller, then hold."""
+    from jarviscore.control.operations import describe
+    from jarviscore.control.policy import PreviewHeld, current_policy
+
+    from jarviscore.evidence.journal import current_journal
+
+    call = _provider_call(provider, method, url, authority, grounding)
+    decision = current_policy().decide(call)
+    host, path = describe(url)
+    noted = {
+        "method": method.upper(), "host": host, "path": path, "atom": call.atom,
+        "action_id": call.action_id,
+        "outcome": decision.outcome, "rule": decision.rule, "reason": decision.reason,
+        "enforced": decision.enforced,
+        "grounding": grounding.record() if grounding is not None else None,
+    }
+    # On record too: a change refused before anyone was asked is evidence of an attempt.
+    _record(current_journal(), _run_name(authority), "policy.preview", noted, False)
+    authority["preview"].append(noted)
+    raise PreviewHeld(decision)
+
+
+def _decide(provider: str, method: str, url: str, authority: Optional[Dict[str, Any]], grounding=None):
+    """Decide on a call before any I/O, and record the decision. Returns (call_id, run, journal)."""
+    from jarviscore.control.operations import describe
+    from jarviscore.control.policy import PolicyDenied, current_policy
+    from jarviscore.evidence.journal import current_journal
+
+    policy = current_policy()
+    if policy.mode == "off":
+        return None, None, None, False
+    authority = authority or {}
+    call = _provider_call(provider, method, url, authority, grounding)
     decision = policy.decide(call)
     host, path = describe(url)
     call_id = uuid.uuid4().hex
@@ -163,6 +198,8 @@ def _decide(provider: str, method: str, url: str, authority: Optional[Dict[str, 
         "rule": decision.rule,
         "enforced": decision.enforced,
     }
+    if grounding is not None:
+        record["grounding"] = grounding.record()
     if journal is not None:
         try:
             journal.append(run, "policy.decision", record)
@@ -179,15 +216,23 @@ def _decide(provider: str, method: str, url: str, authority: Optional[Dict[str, 
     return call_id, run, journal, policy.mode == "strict"
 
 
-def _record(journal, run, kind: str, data: Dict[str, Any], strict: bool) -> None:
+def _record(journal, run, kind: str, data: Dict[str, Any], strict: bool) -> Optional[Dict[str, Any]]:
     if journal is None:
-        return
+        return None
     try:
-        journal.append(run, kind, data)
+        return journal.append(run, kind, data)
     except Exception as exc:  # noqa: BLE001
         if strict:
             raise RuntimeError(f"The call was not made: it could not be recorded ({exc}).") from exc
         logger.warning("Journal write failed: %s", exc)
+        return None
+
+
+def _grounding_rules():
+    from jarviscore.control.policy import current_policy
+
+    policy = current_policy()
+    return policy.grounding if policy.mode != "off" else ()
 
 
 def _record_source(provider: str) -> None:
@@ -297,8 +342,19 @@ class NexusCallProxy:
         """
         from jarviscore.nexus.client import NexusClient
         provider = self._provider_for(connection_id)
+        sent_to = url
+        grounding_rules = _grounding_rules()
+        grounding = None
+        # The broker's own re-reads for grounding are sources, never held to it.
+        if grounding_rules and (authority or {}).get("atom") != "control.grounding":
+            grounding = await self._ground(
+                connection_id, provider, method, url, kwargs, authority, grounding_rules,
+            )
+        if isinstance((authority or {}).get("preview"), list) and method.upper() not in ("GET", "HEAD", "OPTIONS"):
+            # A preview of an action before a person is asked: decided, never sent.
+            _preview(provider, method, url, authority, grounding)
         # Decided before anything leaves this process, including the credential lookup.
-        call_id, run, journal, strict = _decide(provider, method, url, authority)
+        call_id, run, journal, strict = _decide(provider, method, url, authority, grounding)
         headers = _with_idempotency_key(provider, method, headers, authority)
 
         strategy = None
@@ -341,6 +397,12 @@ class NexusCallProxy:
 
         client = _pooled_client()
         _record(journal, run, "effect.attempt", {"call_id": call_id}, strict)
+        if grounding_rules and method.upper() not in ("GET", "HEAD", "OPTIONS"):
+            from jarviscore.control.grounding import OBSERVATIONS
+            from jarviscore.control.operations import describe
+
+            # Whatever this run changes is no longer a source for grounding.
+            OBSERVATIONS.record_change(_workflow_of(authority), provider, describe(sent_to)[1])
         refreshed = False
         try:
             response = await client.request(**request_kwargs)
@@ -389,9 +451,29 @@ class NexusCallProxy:
                 "call_id": call_id, "error": type(exc).__name__, "refreshed": refreshed,
             }, False)
             raise
-        _record(journal, run, "effect.outcome", {
-            "call_id": call_id, "status": response.status_code, "refreshed": refreshed,
-        }, False)
+        outcome = {"call_id": call_id, "status": response.status_code, "refreshed": refreshed}
+        kept = None
+        if (
+            grounding_rules and method.upper() == "GET" and response.status_code < 400
+            and json_body is not None
+        ):
+            from jarviscore.control.grounding import sources_matching
+            from jarviscore.control.operations import describe
+            from jarviscore.evidence.journal import digest
+
+            host, path = describe(sent_to)
+            if sources_matching(grounding_rules, provider, path):
+                kept = (host, path, digest(json_body))
+                outcome["observed"] = kept[2]
+        event = _record(journal, run, "effect.outcome", outcome, False)
+        if kept is not None:
+            from jarviscore.control.grounding import OBSERVATIONS
+
+            # Kept only once its record is written, so grounding can cite it.
+            OBSERVATIONS.record_read(
+                _workflow_of(authority), provider, kept[0], kept[1], json_body, kept[2],
+                {"run": event["run"], "seq": event["seq"], "hash": event["hash"]} if event else None,
+            )
 
         return {
             "ok": response.status_code < 400,
@@ -401,6 +483,31 @@ class NexusCallProxy:
             "json": json_body,
             "headers": dict(response.headers),
         }
+
+    async def _ground(self, connection_id, provider, method, url, kwargs, authority, rules):
+        """Hold the call to the grounding rules that apply to it (control.grounding)."""
+        from urllib.parse import urlsplit
+
+        from jarviscore.control import grounding as g
+
+        request = g.request_from(method, url, kwargs)
+        applying = [rule for rule in rules if rule.applies(provider, (authority or {}).get("atom"), request)]
+        if not applying:
+            return None
+        workflow = _workflow_of(authority)
+        scheme = urlsplit(url).scheme or "https"
+
+        async def read_again(source, selectors, host):
+            handle = connection_id if source.provider == provider else self.connection_handle(source.provider)
+            await self.call(handle, "GET", f"{scheme}://{host}{g.fill(source, selectors)}", authority={
+                "workflow_id": (authority or {}).get("workflow_id") or workflow,
+                "step_id": (authority or {}).get("step_id"),
+                "atom": "control.grounding", "effect": "read", "code_origin": "runtime",
+            })
+
+        return await g.ground(
+            applying, request, workflow, inputs=g.workflow_input(workflow), fetch=read_again,
+        )
 
     @staticmethod
     def make_nexus_call_fn(

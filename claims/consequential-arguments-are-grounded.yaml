@@ -1,0 +1,30 @@
+id: consequential-arguments-are-grounded
+claim: >-
+  In strict mode, a call matched by a grounding rule leaves only when every field
+  the rule names equals (or is one of, or is at most) the named field of a record
+  the broker itself received from a provider in the same workflow, selected by the
+  rule's relationships; otherwise it is refused before any network I/O. Each
+  grounded call cites the recorded responses it relied on, and jarviscore verify
+  checks every citation.
+scope:
+  - Provider calls through NexusCallProxy matched by a grounding rule in CONTROL_POLICY_PATH.
+  - The request as httpx will send it; a body grounding cannot read is refused.
+assumptions:
+  - The systems of record named as sources are correct at the time they are read.
+  - The workflow's reads and the grounded call run in one process (otherwise the call is refused).
+  - The deployment's rule names the right fields and sources.
+not_claimed:
+  - That a record an attacker already changed in the system of record is caught.
+  - That the model cannot choose which record a call refers to, unless the rule takes selectors only from the caller's input.
+  - Anything about calls no grounding rule matches.
+evidence:
+  - tests/test_grounding.py::test_a_payment_to_the_suppliers_iban_on_record_is_grounded_and_cites_what_was_read
+  - tests/test_grounding.py::test_an_iban_planted_in_the_invoice_is_refused_before_anything_leaves
+  - tests/test_grounding.py::test_another_suppliers_iban_read_in_the_same_run_does_not_ground_this_invoice
+  - tests/test_grounding.py::test_a_record_this_run_changed_is_not_a_source
+  - tests/test_grounding.py::test_a_clean_json_argument_does_not_cover_a_different_raw_body
+  - tests/test_grounding.py::test_which_invoice_can_be_pinned_to_the_callers_input
+  - tests/test_grounding.py::test_two_records_answering_one_selector_are_refused
+  - tests/test_grounding.py::test_rereading_before_acting_catches_a_record_that_changed_since
+  - tests/test_grounding.py::test_verify_finds_a_grounding_that_cites_a_read_that_never_happened
+published: []

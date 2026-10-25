@@ -41,6 +41,14 @@ MODES = ("off", "report", "strict")
 CODE_ORIGINS = ("runtime", "shipped", "registry", "model", "direct")
 
 
+class PreviewHeld(RuntimeError):
+    """A change previewed, not made: decided on, then held before anything left."""
+
+    def __init__(self, decision: "Decision"):
+        super().__init__(f"Previewed only, not sent ({decision.outcome}: {decision.rule}).")
+        self.decision = decision
+
+
 class PolicyDenied(RuntimeError):
     """A call the deployment's policy refused before it reached the network."""
 
@@ -65,6 +73,8 @@ class ProviderCall:
     #: binding of the approval it carries (see control.approvals).
     approval_required: bool = False
     approval: Optional[str] = None
+    #: How the call's arguments were held to records the runtime read (control.grounding).
+    grounding: Any = None
 
     @property
     def effect(self) -> str:
@@ -120,6 +130,8 @@ class ControlPolicy:
     approvals: Tuple[Any, ...] = ()
     #: Roles each approver holds, when their sign-in does not carry them.
     principals: Dict[str, Tuple[str, ...]] = field(default_factory=dict)
+    #: Which request fields must come from records the runtime read (control.grounding).
+    grounding: Tuple[Any, ...] = ()
     #: Digest of the policy file, recorded with every decision made under it.
     digest: str = ""
 
@@ -154,6 +166,9 @@ def _builtin_refusal(call: ProviderCall) -> Optional[Tuple[str, str]]:
             "approval-missing",
             f"{call.atom} needs a person's approval and this call carries none.",
         )
+    if call.grounding is not None and not call.grounding.grounded:
+        # Not liftable: grounding is what the deployment asked for on this operation.
+        return ("ungrounded-argument", call.grounding.reason)
     if mutation and not call.atom:
         return (
             "mutation-without-atom",
@@ -229,12 +244,14 @@ def current_policy() -> ControlPolicy:
     rules: List[Rule] = []
     approvals: List[Any] = []
     principals: Dict[str, Tuple[str, ...]] = {}
+    grounding: List[Any] = []
     digest = ""
     if path:
         rules, approvals, principals, digest = _load_document(path)
+        grounding = _load_grounding(path)
     policy = ControlPolicy(
         mode=mode, rules=tuple(rules), approvals=tuple(approvals),
-        principals=principals, digest=digest,
+        principals=principals, grounding=tuple(grounding), digest=digest,
     )
     _cached = (key, policy)
     return policy
@@ -243,6 +260,33 @@ def current_policy() -> ControlPolicy:
 def _load_rules(path: str) -> List[Rule]:
     """The call rules of a policy file."""
     return _load_document(path)[0]
+
+
+def _load_grounding(path: str) -> List[Any]:
+    """The grounding rules of a policy file. One that cannot be read refuses what it
+    matches; one whose match cannot be read refuses every call."""
+    from jarviscore.control.grounding import GroundingRule, parse_rule
+
+    try:
+        with open(path, "rb") as handle:
+            text = handle.read().decode("utf-8")
+        data = json.loads(text) if path.endswith(".json") else __import__("yaml").safe_load(text)
+        entries = (data or {}).get("grounding") or []
+        if not isinstance(entries, list):
+            raise ValueError("grounding is a list of rules")
+    except Exception as exc:  # noqa: BLE001 - _load_document already refuses everything
+        logger.debug("No grounding rules read from %s: %s", path, exc)
+        return []
+    rules = []
+    for index, entry in enumerate(entries):
+        try:
+            rule = parse_rule(entry if isinstance(entry, dict) else {}, index)
+        except Exception as exc:  # noqa: BLE001 - a broken policy fails closed
+            rule = GroundingRule(name=f"grounding-{index}", invalid=str(exc))
+        if rule.invalid:
+            logger.error("Grounding rule %s is invalid (%s); calls it matches are refused.", rule.name, rule.invalid)
+        rules.append(rule)
+    return rules
 
 
 def _load_document(path: str):

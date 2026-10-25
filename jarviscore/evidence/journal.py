@@ -236,6 +236,8 @@ class Verification:
     events: int = 0
     effects: int = 0
     refused: int = 0
+    #: Changes refused when previewed, before a person was asked.
+    refused_in_preview: int = 0
     problems: List[str] = field(default_factory=list)
 
     @property
@@ -244,9 +246,10 @@ class Verification:
 
     def summary(self) -> str:
         state = "intact" if self.ok else f"{len(self.problems)} problem(s)"
+        preview = f", {self.refused_in_preview} refused before approval" if self.refused_in_preview else ""
         return (
             f"{self.runs} run(s), {self.events} event(s), {self.effects} provider call(s) "
-            f"({self.refused} refused): {state}"
+            f"({self.refused} refused{preview}): {state}"
         )
 
 
@@ -294,6 +297,8 @@ def verify(root: str) -> Verification:
             heads[head["run"]] = (head["run_seq"], head["run_hash"])
     runs_dir = os.path.join(root, RUNS)
     seen = set()
+    every: Dict[Tuple[str, int], Dict[str, Any]] = {}
+    groundings: List[Tuple[str, Dict[str, Any]]] = []
     for name in sorted(os.listdir(runs_dir)) if os.path.isdir(runs_dir) else []:
         if not name.endswith(".jsonl"):
             continue
@@ -315,9 +320,35 @@ def verify(root: str) -> Verification:
                 f"event {last['seq']} (cut short or rewritten)"
             )
         _check_decisions(run, events, report)
+        for event in events:
+            every[(run, event.get("seq"))] = event
+            data = event.get("data") or {}
+            if event.get("kind") == "policy.decision" and isinstance(data.get("grounding"), dict):
+                groundings.append((f"run {run} event {event.get('seq')}", data))
     for run in sorted(set(heads) - seen):
         report.problems.append(f"run {run}: registered in the head log but its record is missing")
+    for where, decision in groundings:
+        _check_grounding(where, decision, every, report)
     return report
+
+
+def _check_grounding(where: str, decision: Dict[str, Any], every, report: Verification) -> None:
+    """A grounded call cites, for every record it relied on, the response the broker recorded."""
+    grounding = decision["grounding"]
+    if decision.get("outcome") == "allow" and decision.get("enforced") and not grounding.get("grounded"):
+        report.problems.append(f"{where}: an ungrounded call was allowed in strict mode")
+    if not grounding.get("grounded"):
+        return
+    for citation in grounding.get("citations") or []:
+        ref = citation.get("event")
+        if not isinstance(ref, dict):
+            report.problems.append(f"{where}: grounded on {citation.get('binding')} with no record of reading it")
+            continue
+        cited = every.get((ref.get("run"), ref.get("seq")))
+        if cited is None or cited.get("hash") != ref.get("hash"):
+            report.problems.append(f"{where}: grounded on {citation.get('binding')}, whose read is not in the record")
+        elif cited.get("kind") != "effect.outcome" or (cited.get("data") or {}).get("observed") != citation.get("observed"):
+            report.problems.append(f"{where}: grounded on {citation.get('binding')}, which is not the response recorded")
 
 
 def _check_decisions(run: str, events: List[Dict[str, Any]], report: Verification) -> None:
@@ -334,6 +365,8 @@ def _check_decisions(run: str, events: List[Dict[str, Any]], report: Verificatio
             approved.add(data.get("binding"))
         elif event.get("kind") == "approval.claim":
             approved.add(data.get("binding"))
+        if event.get("kind") == "policy.preview" and data.get("outcome") == "deny" and data.get("enforced"):
+            report.refused_in_preview += 1
         if event.get("kind") == "policy.decision":
             decisions[call] = data
             if data.get("outcome") == "deny" and data.get("enforced"):
