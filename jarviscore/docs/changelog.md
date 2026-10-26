@@ -37,256 +37,86 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 
 ### Added
 
-- **Every provider call is decided on before it leaves, and recorded.** Calls
-  through `NexusCallProxy` (integrations, code in the sandbox, the Slack room,
-  workspace sources) are built from what is actually about to be sent and the
-  authority they arrive with, then decided on before any network I/O, including
-  the credential lookup. `CONTROL_MODE=report` (the default) records each
-  decision; `strict` refuses what policy does not allow, and refuses a call whose
-  decision cannot be recorded. Deployment rules (`CONTROL_POLICY_PATH`) can refuse
-  more. See [Control and Evidence](concepts/control-and-evidence.md).
-- **Operation contracts read from an integration's own code.** What an
-  integration can send through `nexus_call` (method and URL template) is read
-  statically, following constants, closures, helpers and dispatcher branches. 914
-  of 1,186 shipped integrations have a fully verified contract, and a test holds
-  the whole catalogue to this: no shipped integration contains reachable code that
-  can send beyond its declared effect. Code the model writes or repairs may
-  mutate a provider only through operations its own code verifiably sends.
-- **A hash-linked journal and `jarviscore verify`.** Each workflow step's
-  decisions and provider calls are written as hash-linked events, with a head log
-  registering every run's latest event. `jarviscore verify` checks a journal
-  offline: edited, removed, reordered or cut-short records, removed runs, and any
-  provider call without an allow decision before it. Records hold methods, hosts,
-  paths and decisions, never query strings, bodies or credentials.
-- **`claims/`**: each control and evidence claim with its scope, assumptions,
-  what it does not promise, and the tests behind it; a claim naming evidence that
-  does not exist fails the build.
-
-- **The institution decides who may approve.** `approvals:` rules in the
-  control policy file decide which actions need a person (over each integration's
-  own setting), which roles may approve them, that the approver is not the person
-  who asked, and how strongly their identity must be established; a waiver never
-  removes approval from a destructive action. `Mesh.resolve_hitl` takes an
-  approval assertion signed by your backend over the exact action
-  (`control.approvals.sign_assertion`, `APPROVAL_ASSERTION_KEY`), an `Approver`,
-  or a bare name, recorded as `verified`, `asserted` or `unauthenticated`. An
-  approval that does not meet policy raises `ApprovalRefused`; the approver is
-  checked again under the policy in force when the action runs.
-- **An approved action is claimed once, and an interrupted one is reconciled.**
-  Starting it is claimed atomically; a run that stops before its outcome is
-  recorded leaves `OUTCOME_UNKNOWN`, never a blind retry. `Mesh.reconcile_hitl`
-  records what a person found. A gated call that reaches the broker without its
-  approval is refused, and `jarviscore verify` checks every call carrying an
-  approval against an approval of that exact action. Every approval step is in
-  the journal.
-- **Retries do not repeat a payment.** Mutations to Stripe, Adyen, Mollie,
-  GoCardless, Checkout.com and PayPal carry the operation's id as their
-  idempotency key.
-- **Grounding: a payment's account and amount come from the system of record.**
-  `grounding:` rules in the control policy name, for an operation, which request
-  fields must equal, be one of, or be at most fields of records the broker itself
-  read in the same workflow, following relationships (this invoice's supplier,
-  not any supplier). Typed comparison (IBAN, money, email, text), refusal of
-  ambiguity and of records the run itself changed, selectors pinned to the
-  caller's input, optional re-read before acting, and every grounded call citing
-  the journal event of each read it relied on, checked by `jarviscore verify`.
-  See [Grounding](concepts/control-and-evidence.md#grounding).
-- **Every effect, not only provider calls, is decided before it happens and
-  recorded.** Code runs in the sandbox, host commands, artifacts published to
-  blob storage, workspace changes exported or written, memories kept, messages
-  to peers (sent, delegated from sandboxed code, and the engine's broadcast of
-  every step result), and step results delivered downstream all pass one
-  decision point (`jarviscore.control.effects`) recorded in the journal and held
-  by `jarviscore verify`. `effects:` rules in the control policy refuse any of
-  them. In strict mode, model-written code and commands are refused when they
-  would run outside a confined sandbox, unless a rule allows it. A test fails the
-  build when a raw effect call in the package is neither decided on nor
-  classified. Your own tools and `CustomAgent`s can put their effects through the
-  same decision point with `mediated(Effect(...))`. See
-  [Every other effect](concepts/control-and-evidence.md#every-other-effect).
-- **`jarviscore policy check`, `review` and `scopes`.** `check` names every rule a
-  deployment would silently fail closed on, and whether this host can confine
-  the sandbox; `review` groups what strict mode would refuse (or refused) from a
-  journal, with what to do about each; `scopes` prints who may do what. See
-  [Turning On Control](guides/control-policy.md).
-- **What a browser page sends is decided where it leaves.** Every top-level
-  navigation and every request carrying data out of the browser (forms,
-  `fetch`, XHR, beacons, including ones browser code starts with `evaluate`) is
-  decided and recorded (`browser` sink). In strict mode a page sends only to the
-  site it is on unless a rule allows another host (`browser-send-off-site`);
-  requests are intercepted there and only observed in report mode (intercepted
-  in report mode too wherever a scope names a browser target, whose reads, in a
-  frame or `fetch`, are then decided as well). An approval of a form submission
-  shows the values the form will submit and where to, read from the page; once
-  performed, the result says what the form carried (`submitted`) and exactly
-  what left the browser.
-- **An agent acts for a person with that person's credential only, within what
-  they delegated.** JarvisCore names the person, agent and operation on every
-  credential request to Nexus (which, from 0.7, releases a credential only for
-  its owner); a credential Nexus refuses is not replaced by another, and the
-  credential cache is per person. A mandate registered with the work
-  (`on_behalf_of` or `context["mandate"]`: systems, effects, scopes, expiry) is
-  enforced at every provider call (`outside-mandate`, not liftable, in report
-  mode as in strict). Every decision in the journal names
-  `acting_for`. See [Acting for a person](concepts/control-and-evidence.md#acting-for-a-person).
-- **`on_behalf_of` on every entry point, for applications with their own users
-  and tenants.** `run_task`, `execute_goal`, `submit_goal`, `workflow` and
-  `create_chat_router` take `on_behalf_of=OnBehalfOf.of(tenant, user, mandate=...)`
-  (or a `Person` or person key); `act_for` covers a block of your own code. The
-  chat router asks your application whom each chat is for and drops `acting_for`
-  and `mandate` from the request body. Workflows, including DAGs an agent builds
-  while working for someone, register the person with their definition, so steps
-  on other nodes act for the same person. `mesh.connect(provider, on_behalf_of=...)`
-  starts a user's consent and `mesh.connected(...)` checks it. With a resolver,
-  each chat conversation belongs to whoever started it: nobody else can continue
-  it, stream it or read its history. `OnBehalfOf`,
-  `Person` and `act_for` are exported from `jarviscore`. See
-  [Agents That Act for Your Users](guides/acting-for-your-users.md).
-- **Your organisation's scopes: an agent working for a person does only what
-  that person may do.** A `scopes:` section in the control policy says which
-  operations need which scope (`requires`), who must hold a scope to approve
-  them (`approved_by`), and limits checked against the request as it leaves
-  (`at_most`, `one_of`, `equals`, typed as money, email and so on). Your
-  application says what each person holds: `OnBehalfOf(..., scopes={"claims.approve":
-  {"amount": "10000"}})`; `scopes.grants` covers people without your sign-in, and
-  `unattended` work done for no one. Approving Carol's 4,000 claim is allowed,
-  her 40,000 claim is refused (`over-scope-limit`), and Dave, without the scope,
-  is refused outright (`scope-missing`). The refusals hold in report mode as well
-  as strict, no deployment rule lifts them, a grant that does not state a limit
-  is refused (`"*"` states none), and a mandate's `scopes` narrows them for one
-  piece of work. They hold for provider calls and for browser pages (`sink:
-  browser`), across sub-agents and nodes, and are replayed with the run. An
-  `approved_by` scope makes the action wait for an approver known to hold it
-  (`sign_assertion(..., scopes=...)`), whose limit is checked when it runs. The
-  agent is told what is out of reach, and an integration the person can never use
-  is shown to it as refused (calling it runs nothing and is recorded), so it says
-  the person may not instead of doing something else in its place. `jarviscore policy scopes` prints who may do what;
-  `jarviscore policy check` validates the section; `jarviscore evidence` shows
-  the scopes each decision was checked against. See
-  [Agents That Act for Your Users](guides/acting-for-your-users.md#4-hold-them-to-your-organisations-scopes).
-- **Evidence per person and per tenant.** `jarviscore evidence acme/u_1` (or
-  `acme/` for a tenant) lists each run done for them with every decision and
-  approval; `--export DIR` copies those runs with the deployment's head log for
-  an auditor, who checks them with `jarviscore verify --export DIR`; runs that
-  also worked for others are left out, and the export carries only its own runs'
-  head entries (no other run's name). `jarviscore.evidence.people` offers the
-  same from Python (`account`, `export`, `erase`). `--erase --yes` erases a person's replay
-  content while the journal still verifies. Each run records whom it was for
-  (`run.start`), and replays as that person.
-- **Replay any recorded run.** Each agent run keeps every model request and
-  response, gate result and tool result (content-addressed beside the journal;
-  the chain holds their digests), and `jarviscore replay` re-simulates it from
-  that record with every model call, gate and tool answered from it, so nothing
-  is called and nothing acts. It reports whether the agent made the same
-  decisions and ended the same way, how many model requests were identical
-  (runtime clock masked), and otherwise the first divergence. `JOURNAL_CAPTURE`:
-  `full` (default), `digests`, `off`. Content unused for `JOURNAL_CONTENT_DAYS`
-  (30) is erased in the background; the journal still verifies. A run's record
-  never breaks or slows the run: a journal that cannot be written leaves the run
-  as it was, and concurrent runs of one agent each record their own.
+- **Control before every effect.** Every provider call, sandboxed program, host
+  command, artifact, workspace change, memory, peer message, step result and
+  browser request is decided on before it happens and recorded.
+  `CONTROL_MODE=report` (the default) records; `strict` refuses what policy does
+  not allow, and anything whose decision cannot be recorded. A control policy
+  file (`CONTROL_POLICY_PATH`) adds deployment rules, approval rules, grounding
+  and scopes. `jarviscore policy check | review | scopes` validates a policy, lists
+  what strict mode would refuse, and shows who may do what.
+  See [Turning On Control](guides/control-policy.md).
+- **Integrations are held to what their code sends.** Each integration's
+  operations are read from its source (914 of 1,186 shipped ones fully verified),
+  and code the model writes may only mutate a provider through operations its
+  own code verifiably sends.
+- **Approvals the institution decides.** `approvals:` rules set which actions need
+  a person, which roles may approve, maker-checker, and how strongly the approver
+  must be identified (`sign_assertion` for approvals signed by your backend). An
+  approved action runs at most once; one interrupted mid-run is left
+  `OUTCOME_UNKNOWN` for a person to reconcile. Payments to Stripe, Adyen, Mollie,
+  GoCardless, Checkout.com and PayPal carry an idempotency key.
+- **Grounding.** `grounding:` rules require a payment's account and amount (or any
+  field) to come from records the runtime itself read, so an instruction planted
+  in a document cannot redirect it. Live red team, strict mode: 0 of 14 attacks
+  succeeded. See [Grounding](concepts/control-and-evidence.md#grounding).
+- **Agents that act for your users.** `on_behalf_of=OnBehalfOf.of(tenant, user)`
+  on `run_task`, `execute_goal`, `submit_goal`, `workflow` and
+  `create_chat_router`: the work uses that user's own credentials (Nexus 0.7
+  releases a credential only to work for its owner, never falling back to
+  another), within what they delegated (a mandate), on any node, and every record
+  names them. `mesh.connect` starts a user's consent.
+  See [Agents That Act for Your Users](guides/acting-for-your-users.md).
+- **Your organisation's scopes.** A `scopes:` section says which operations need
+  which scope (approve claims, read financial reports, file a SAR), with limits
+  checked on the outgoing request; your application says what each person holds.
+  A request beyond them is refused, in report mode too, and the agent is told
+  what is out of reach. `approved_by` requires an approver holding a scope within
+  its limit. See [the guide](guides/acting-for-your-users.md#4-hold-them-to-your-organisations-scopes).
+- **A verifiable journal.** Decisions and effects are written as hash-linked
+  events; `jarviscore verify` checks a journal (or a copy) offline. `jarviscore
+  evidence acme/u_1` lists what agents did for a person or tenant, `--export`
+  hands it to their auditor (`verify --export`), and `--erase` removes a person's
+  replay content while the journal still verifies. Records hold methods, hosts,
+  paths and decisions, never bodies or credentials.
+- **Replay.** `jarviscore replay` re-runs a recorded agent run from its record,
+  every model call and tool answered from it, so nothing is called and nothing
+  acts, and reports whether the agent made the same decisions.
+  `JOURNAL_CAPTURE` and `JOURNAL_CONTENT_DAYS` (30) control what is kept.
   See [Replay](concepts/control-and-evidence.md#replay).
-- **Nobody is asked to approve what policy will refuse.** Where a grounding rule
-  could apply, a consequential action is previewed before a person is asked: its
-  code runs with every change held at the broker after the decision. A change
-  strict policy refuses returns `POLICY_WOULD_REFUSE` without asking anyone; the
-  approval request otherwise carries what was checked (`payload.checks`).
+- **`claims/`**: each control and evidence claim with its scope, assumptions and
+  the tests behind it; a claim citing a missing test fails the build.
 
 ### Changed
 
-- **Square integrations use a stable idempotency key.** `square_create_payment`,
-  `square_create_customer` and `square_create_order` made a new random key on
-  every call, so a retried payment was a new payment to Square. The key is now
-  derived from the payload.
-- **Provider calls reuse their connection.** `NexusCallProxy` opened a new HTTP
-  client, and so a new TCP and TLS handshake, for every call. Calls on an event
-  loop now share one pool, kept for `NEXUS_KEEPALIVE_SECONDS` (120); on a measured
-  HTTPS endpoint a call went from about 500 ms to about 90 ms. Deciding and
-  recording add about 0.1 ms. `AutoAgent.teardown()` closes the pool.
-- **An integration's mutation is held to what it declares.** The sandbox let any
-  integration with an action id send any POST, PUT, PATCH or DELETE; the broker
-  now holds it to the methods its declared effect allows.
-- **`import jarviscore` takes about 0.13 s instead of about 3 s, and every
-  sandboxed code run starts about 3 s sooner.** The package and
-  `jarviscore.execution` imported the mesh, every LLM SDK and the planner on
-  import; so did the sandbox's child process, for every integration call and
-  every `execute_code`. Their public names now load on first use (PEP 562); the
-  names, `from jarviscore import *`, and reaching subpackages as attributes are
-  unchanged. Measured: a sandboxed integration run 3.6 s to 0.55 s; a live
-  coder step that reads an invoice and asks to pay it, median 8.9 s to 7.45 s.
+- **Report mode refuses what a person may not do.** Requests beyond a person's
+  scopes or mandate are refused whatever the mode (except `off`); everything else
+  is still only recorded in report mode.
+- **Faster startup and calls.** `import jarviscore` takes about 0.13 s instead of
+  3 s, and each sandboxed run starts about 3 s sooner (a live coder step: median
+  8.9 s to 7.45 s). Provider calls reuse their connection
+  (`NEXUS_KEEPALIVE_SECONDS`): about 500 ms to 90 ms per call on HTTPS.
+- **Square integrations use a stable idempotency key**, so a retried payment is
+  not a new payment.
 
 ### Fixed
 
-- **Work for one person inside work for another keeps nothing of the first.**
-  `act_for(bob)` inside work for Ada kept Ada's mandate. Naming a person now
-  replaces the whole principal (person, mandate, scopes).
-- **A mandate is enforced in report mode too.** What a person delegated
-  (`outside-mandate`) was only recorded outside strict mode; like scopes, it now
-  holds whenever control is on.
-- **Review findings on scopes and evidence (before release).**
-    - A deployment `deny` rule matching the same call no longer turns a person's
-      refusal (scope, mandate) into a report-only "would refuse".
-    - Scope and grounding rules match the path as a server reads it (`//x`,
-      `/./x`, `%61`, `;matrix`, encoded slashes, any case), so a variant of an
-      operation's path is held to it.
-    - `verify` again reports events appended after a run's registered head, or a
-      run the head log never registered, beyond the one event an interrupted
-      write can leave.
-    - Erasing one person's replay content keeps the content of runs that also
-      worked for someone else.
-    - The browser request broker decides for the person the current run is for,
-      not whoever opened a reused browser.
-- **Review findings on control and evidence.**
-    - Code not shipped with JarvisCore (registry, model-written, direct) is never
-      taken as doing less than its method: a "read" that POSTs is decided as a write.
-    - A grounding check builds the query exactly as the request sends it.
-    - A `fresh: reread` value counts only reads made after the fetch.
-    - A grounding rule with a malformed path no longer stops every call it does
-      not match.
-    - Work acting for a person never falls back to the local credential store
-      when the gateway fails.
-    - `verify` reports a run whose registered head is missing or rewritten, and
-      notes (not problems) a run still being written.
-    - A refused model-code effect reports `performed: false`.
-- **Repairing an integration that acts on the world no longer performs it.**
-  A repair is proven by running it. For a write, notify or destructive
-  integration that performed the effect, with the arguments the repair carried
-  and nobody's approval: found in a live run, where a payment the person had
-  approved with no arguments was "repaired" and then paid with arguments nobody
-  saw. Repairs of such integrations are refused (`ATOM_REPAIR_WOULD_ACT`) and
-  reported for a person to fix; read integrations are repaired as before. In
-  strict mode the broker also refuses any mutation from code the model wrote that
-  carries no approval of that exact action (`unapproved-model-effect`).
-- **An answer written after the budget ran out reports only what happened.** The
-  landing turn wrote its final answer from memory and, in a live browser run,
-  reported a refused send as done; its output also replaced the run's trajectory
-  with one entry. It now gets the run's own list of attempts that were refused,
-  failed or are waiting, and keeps the full trajectory.
-- **An agent reports what its actions did, not what it meant them to do.** In
-  live browser runs an agent claimed to have sent data that never left the
-  browser. A step that resumes after an approval is now told which of its
-  earlier attempts did not succeed (kept with the approval request, so it holds
-  without a memory checkpoint), and each browser action's result lists what
-  actually left the browser during it, from the request broker's record.
-- **Nobody is asked to approve a call that cannot run.** A consequential call
-  missing a required argument was sent for approval as it was; it is now refused
-  with `ATOM_PARAMETERS_INVALID` first.
-- **The coder sees the arguments every integration takes.** Integrations were
-  offered to the model with an empty argument schema, so it guessed arguments
-  from the description and often sent none. Each is now offered with its real
-  parameters. The coder is also told to read an action's preconditions before
-  taking it, and the sandbox notes in its prompt render as lines, not literal `\n`.
-- **The effect-intent review no longer goes round in circles.** It is skipped for
-  a call missing required arguments (refused plainly instead), never asks for
-  "authorization" (policy and approval decide that), and stops after redirecting
-  the same call twice (`EFFECT_INTENT_UNRESOLVED`). In 20 live runs of a payment
-  task on the same model, reaching the approval gate went from 19/20 to 20/20,
-  median model calls 7 to 3, input tokens 24.7k to 11.4k, output tokens 1,063 to
-  259, and median time 19.4s to 8.7s; argument-less calls went from 40 to 0.
+- **Agents report what their actions did.** An answer written after the budget ran
+  out, or after an approval, now rests on the run's record: a browser action's
+  result says what the form submitted and exactly what left the browser, and an
+  approval shows the values a form will submit.
+- **Repairing an integration that acts on the world no longer performs it**
+  (`ATOM_REPAIR_WOULD_ACT`).
+- **The coder sees every integration's real arguments**, and nobody is asked to
+  approve a call that is missing one (`ATOM_PARAMETERS_INVALID`). On a live payment
+  task: reaching approval 19/20 to 20/20, median 19.4 s to 8.7 s, input tokens
+  24.7k to 11.4k.
 
 ### Removed
 
-- `CoderSandbox._execute_local` and its helpers. Nothing called them, and they
-  would have given generated code a `nexus_call` no decision was made on.
+- `CoderSandbox._execute_local`, unused, which gave generated code an undecided
+  `nexus_call`.
+
 ## 2.4.1 <span class="changelog-date">2026-10-24</span>
 
 ### Fixed
