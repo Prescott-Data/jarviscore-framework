@@ -264,7 +264,8 @@ async def finish(room: Room, mesh, workflow_id: str, result: Dict[str, Any]) -> 
                 held_for=held_for,
                 sources=sources,
             )
-        summary = str(result.get("result_summary") or "")
+        # Work that did not succeed says why: the result's summary, else the reason it stopped.
+        summary = str(result.get("result_summary") or result.get("error") or "")
         room.note("ask.finished", **_who(asked_by), workflow_id=workflow_id,
                   status=result.get("status"), summary=summary,
                   proposal=proposal.id if proposal else "", held_for=held_for)

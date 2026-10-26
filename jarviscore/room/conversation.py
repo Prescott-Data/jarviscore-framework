@@ -123,7 +123,7 @@ class ChatSurface:
     async def show_connect(self, thread: Optional[str], request: Dict[str, Any], *, to: Person) -> str:
         """Ask ``to``, and only them, to connect their own account that the work needs.
 
-        ``request`` holds ``provider``, ``title`` and ``auth_url``, where they consent
+        ``request`` holds ``provider`` (and its ``name``), ``title`` and ``auth_url``, where they consent
         (empty when this deployment cannot connect accounts). The work goes on by
         itself once they have connected. By default, a private message with the link.
         """
@@ -591,10 +591,13 @@ class RoomConversation:
     async def _ask_to_connect(self) -> None:
         """Ask each person whose work waits on an account of theirs to connect it, and let
         the work go on once they have."""
+        from jarviscore.nexus.providers import display_name
+
         mesh = getattr(self.room, "mesh", None)
         for request in self._waiting_connections():
             key, person = f"question:{request['id']}", self._person(request["person"])
             context, provider = request["context"], request["provider"]
+            name = display_name(provider)
             thread = self._threads.get(f"wf:{context['workflow_id']}")
             if self.store.delivered(self.room.key, self.surface.key, key) is None:
                 auth_url = ""
@@ -606,13 +609,13 @@ class RoomConversation:
                     except Exception as exc:  # noqa: BLE001 - asked without a link, and logged
                         logger.warning("Room %s: could not start connecting %s for %s: %s",
                                        self.room.key, provider, person.key, exc)
-                detail = (f"The agents work with your own {provider} account, and only for what you "
+                detail = (f"The agents work with your own {name} account, and only for what you "
                           "ask. Connect it once; this work goes on by itself."
                           if auth_url else
-                          f"This deployment cannot connect {provider} accounts; ask whoever runs it.")
+                          f"This deployment cannot connect {name} accounts; ask whoever runs it.")
                 posted = await self.surface.show_connect(thread, {
-                    "id": request["id"], "provider": provider, "auth_url": auth_url, "detail": detail,
-                    "title": f"Connect your {provider} account to go on with this work",
+                    "id": request["id"], "provider": provider, "name": name, "auth_url": auth_url,
+                    "detail": detail, "title": f"Connect your {name} account to go on with this work",
                 }, to=person)
                 self.store.mark_delivered(self.room.key, self.surface.key, key, posted or "")
                 self._connect_checked[request["id"]] = time.monotonic()
@@ -633,7 +636,7 @@ class RoomConversation:
             except (KeyError, ValueError):
                 continue  # it went on already
             self._connect_checked.pop(request["id"], None)
-            await self.surface.say(thread, f"{person.display} connected {provider}; the work goes on.")
+            await self.surface.say(thread, f"{person.display} connected {name}; the work goes on.")
 
     # ── People → room ───────────────────────────────────────────────────────
 

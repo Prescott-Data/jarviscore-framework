@@ -773,6 +773,8 @@ async def test_a_declined_action_in_the_room_never_runs(claims_room):
         await conversation.press(carol, DECLINE, surface.approvals[0]["id"], None)
         await asyncio.wait_for(asking, 20)
         assert Payer.paid == []
+        finished = next(e for e in room.events() if e.get("type") == "ask.finished")
+        assert "declined" in finished["summary"], "the room says why the work did not go ahead"
         assert any(p.text.startswith("Carol declined") for p in surface.posts)
         assert len(surface.approvals) == 1, "a decided action is not asked again"
     finally:
@@ -857,7 +859,7 @@ async def test_work_needing_an_account_asks_its_person_to_connect_it_then_goes_o
         asked = await asyncio.wait_for(asking, 20)
         assert asked.status == "completed", asked.result
         assert Filer.filed == ["acme/erin"]
-        assert any(p.text == "Erin connected claimshub; the work goes on." for p in surface.posts)
+        assert any(p.text == "Erin connected Claimshub; the work goes on." for p in surface.posts)
         assert len(surface.connects) == 1, "asked once"
     finally:
         following.cancel()
