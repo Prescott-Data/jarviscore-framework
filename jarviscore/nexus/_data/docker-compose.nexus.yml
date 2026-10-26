@@ -34,7 +34,7 @@ services:
   # Agents never talk to it directly; the Gateway does, with NEXUS_BROKER_API_KEY.
   nexus-broker:
     # Pinned, not :latest, so an upgrade is a decision rather than a surprise.
-    image: ghcr.io/prescott-data/nexus-broker:${NEXUS_BROKER_IMAGE_TAG:-v0.6.7}
+    image: ghcr.io/prescott-data/nexus-broker:${NEXUS_BROKER_IMAGE_TAG:-v0.7.0}
     container_name: nexus-broker
     ports:
       # Published for the browser's OAuth callback. Loopback only: the admin
@@ -58,6 +58,9 @@ services:
       DEFAULT_RETURN_URL: ${NEXUS_RETURN_URL:-http://localhost:8000/oauth/callback}
       ALLOWED_RETURN_DOMAINS: "localhost,127.0.0.1"
       ENFORCE_RETURN_URL: "false"
+      # Whom a credential may be released for: "required" when agents act for
+      # your users (a connection id alone then releases nothing).
+      SUBJECT_BINDING: ${NEXUS_SUBJECT_BINDING:-optional}
     depends_on:
       nexus-db:
         condition: service_healthy
@@ -77,7 +80,7 @@ services:
   # What JarvisCore talks to (NEXUS_GATEWAY_URL). Every route except /health
   # and the credential-capture form needs X-API-Key: NEXUS_GATEWAY_API_KEY.
   nexus-gateway:
-    image: ghcr.io/prescott-data/nexus-gateway:${NEXUS_GATEWAY_IMAGE_TAG:-v0.6.7}
+    image: ghcr.io/prescott-data/nexus-gateway:${NEXUS_GATEWAY_IMAGE_TAG:-v0.7.0}
     container_name: nexus-gateway
     ports:
       - "${NEXUS_BIND_ADDRESS:-127.0.0.1}:${NEXUS_GATEWAY_PORT:-8090}:8090"

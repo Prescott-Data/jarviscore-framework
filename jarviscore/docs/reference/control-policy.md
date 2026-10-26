@@ -162,8 +162,8 @@ scopes:
 |---|---|
 | `require[].match` | A provider call (`provider`/`system`, `method`, `host`, `path` with `{variables}`, `atom`, `effect`) or another effect (`sink`, `action`, `target` glob, `origin`, `agent`), not both. Match the operation (`method` and `path`) to hold any code reaching it; `atom` alone holds only that integration |
 | `require[].requires` | The scope the person the work is for must hold |
-| `require[].approved_by` | The scope the approver must hold (provider calls only). The action then always needs an approval from an `asserted` or `verified` approver |
-| `require[].limits` | Each `{field, kind, at_most\|one_of\|equals: <term>}`: the request `field` (`json.*`, `query.*`, `form.*`, `path.<variable>`; effects: `attributes.*`, `target`) compared as `kind` (`money`, `number`, `email`, `iban`, `id`, `text`, `exact`) with the holder's grant term. `at_most` takes `money` or `number` |
+| `require[].approved_by` | The scope the approver must hold (provider calls only). The action then always needs an approval from an `asserted` or `verified` approver, whose scopes come from their assertion, `Approver(scopes=...)` or `grants`. Only an integration's action can wait for an approval: other code reaching the operation carries none and is refused |
+| `require[].limits` | Each `{field, kind, at_most\|one_of\|equals: <term>}`: the request `field` (`json.*`, `query.*`, `form.*`, `path.<variable>`; effects: `attributes.*`, `target`) compared as `kind` (`money`, `number`, `email`, `iban`, `id`, `text`, `exact`) with the holder's grant term. `at_most` takes `money` or `number`. `email` compares the domain case-insensitively and the local part exactly |
 | `grants` | Scopes per person key, for people whose sign-in does not carry them. Your application's `OnBehalfOf(..., scopes=...)` comes first for every scope it names |
 | `unattended` | Scopes work done for no one holds |
 

@@ -381,6 +381,7 @@ Required only when agents call third-party services (GitHub, Slack, Jira, Stripe
 | `NEXUS_BROKER_URL` | (none) | Broker URL, e.g. `http://localhost:8080`. Used by dashboard and SDK to POST credentials directly to the Broker's `/auth/capture-credential` endpoint for non-OAuth providers. |
 | `NEXUS_RETURN_URL` | `http://localhost:8000/oauth/callback` | OAuth callback URL; the Nexus broker redirects here after consent. |
 | `NEXUS_DEFAULT_USER_ID` | `jarviscore-agent` | User identity passed to Nexus for credential lookups. |
+| `NEXUS_SUBJECT_BINDING` | `optional` | For `jarviscore nexus up`: the broker's `SUBJECT_BINDING`. `required` releases a credential only to work naming the person who owns it; use it when agents act for your users ([guide](../guides/acting-for-your-users.md#3-make-nexus-hold-you-to-it)). |
 | `AUTH_STRATEGY_CACHE_TTL` | `300` | Seconds before the resolved auth strategy is re-fetched from the Gateway. |
 | `AUTH_FLOW_TIMEOUT` | `300` | Maximum seconds to wait for a user to complete OAuth browser consent. |
 | `AUTH_POLL_INTERVAL` | `2.0` | Seconds between Gateway status polls during an OAuth flow. |

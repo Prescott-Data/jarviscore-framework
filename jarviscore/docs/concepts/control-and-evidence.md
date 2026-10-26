@@ -13,6 +13,24 @@ runs, commands on the host, files it publishes, changes it exports, memories it
 keeps, messages to other agents, the result it delivers) is decided before it
 happens and recorded.
 
+```mermaid
+flowchart LR
+    A["Agent proposes<br/>(provider call, code, browser,<br/>memory, peer message, result)"] --> P{"1. Whom it is for:<br/>mandate and scopes"}
+    P -->|beyond them| R["Refused before it happens"]
+    P -->|within them| D{"2. Deployment rules<br/>and built-in rules"}
+    D -->|allow| E["The effect happens"]
+    D -->|refuse| R
+    E --> J[("Hash-linked journal")]
+    R --> J
+    J --> V["jarviscore verify"]
+    J --> RP["jarviscore replay"]
+    J --> X["jarviscore evidence"]
+```
+
+What a person may do (their mandate and scopes) is decided first and holds in every
+mode; deployment and built-in rules then decide the rest, refusing in strict mode
+and recording in report mode. Every decision, allowed or refused, is in the journal.
+
 | What | Where |
 |---|---|
 | Every provider call is decided on before anything leaves | `NexusCallProxy` |

@@ -12,6 +12,15 @@ file, memory, message, browser request and result. Nothing is refused until you
 say so. This guide takes a deployment from that default to **strict mode**, where
 what your policy does not allow does not happen, in five steps.
 
+```mermaid
+flowchart LR
+    S1["1. Record<br/>report mode"] --> S2["2. Review<br/>jarviscore policy review"]
+    S2 --> S3["3. Write and check<br/>jarviscore policy check"]
+    S3 --> S4["4. Strict mode"]
+    S4 --> S5["5. Hand over evidence<br/>jarviscore verify"]
+    S4 -. keep reviewing .-> S2
+```
+
 How it works is in [Control and Evidence](../concepts/control-and-evidence.md);
 every key of the policy file is in the [Control Policy Reference](../reference/control-policy.md).
 If your agents work for your application's users, what each of them may do

@@ -33,7 +33,7 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 
 <div class="changelog-release" markdown>
 
-## Unreleased
+## 3.0.0 <span class="changelog-date">2026-10-26</span>
 
 ### Added
 
@@ -116,6 +116,18 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 
 - `CoderSandbox._execute_local`, unused, which gave generated code an undecided
   `nexus_call`.
+
+### Upgrading from 2.4
+
+1. **Nothing is refused until you configure it.** Report mode (the default)
+   decides and records; it refuses only beyond a person's scopes or mandate,
+   which you set. Adopt strict mode with
+   [Turning On Control](guides/control-policy.md).
+2. **The journal is on by default** (`JOURNAL_DIR=.jarviscore/journal`), with
+   replay content (`JOURNAL_CAPTURE=full`) kept 30 days. Point it at durable
+   storage, or set `JOURNAL_CAPTURE=digests`, or `JOURNAL_DIR=off`.
+3. **Local Nexus:** `jarviscore nexus up` now runs v0.7.0. Set
+   `NEXUS_SUBJECT_BINDING=required` when agents act for your users.
 
 ## 2.4.1 <span class="changelog-date">2026-10-24</span>
 
