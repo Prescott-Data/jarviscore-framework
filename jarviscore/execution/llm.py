@@ -210,6 +210,13 @@ TOKEN_PRICING = {
     "claude-opus-4": {"input": 15.00, "output": 75.00, "cached": 3.75},
     "claude-sonnet-4": {"input": 3.00, "output": 15.00, "cached": 0.75},
     "claude-haiku-3.5": {"input": 1.00, "output": 5.00, "cached": 0.25},
+    # The Claude 5 family (Anthropic first-party rates, October 2026)
+    "claude-fable-5-1": {"input": 10.00, "output": 50.00, "cached": 0.25},
+    "claude-opus-5-5": {"input": 4.00, "output": 20.00, "cached": 0.20},
+    "claude-opus-5": {"input": 5.00, "output": 25.00, "cached": 0.50},
+    "claude-sonnet-5-5": {"input": 2.00, "output": 10.00, "cached": 0.20},
+    "claude-sonnet-5": {"input": 2.00, "output": 10.00, "cached": 0.20},
+    "claude-haiku-5-5": {"input": 0.10, "output": 0.50, "cached": 0.01},
 }
 
 _DEFAULT_PRICING = {"input": 3.0, "output": 15.0}

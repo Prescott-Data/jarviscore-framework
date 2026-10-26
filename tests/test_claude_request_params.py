@@ -73,3 +73,10 @@ def test_a_claude_5_request_is_one_the_api_accepts():
 def test_an_older_claude_request_is_unchanged():
     sent = _send("claude-sonnet-4-5")
     assert sent["temperature"] == 0.7 and sent["tool_choice"] == {"type": "any"}
+
+
+def test_claude_5_calls_are_priced():
+    from jarviscore.execution.llm import _call_cost
+
+    cost, source = _call_cost("claude-opus-5-5", 1_000_000, 1_000_000)
+    assert source == "builtin" and cost == 24.0
