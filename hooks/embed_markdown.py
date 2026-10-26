@@ -2,7 +2,7 @@
 MkDocs hook: embed_markdown
 ============================
 Embeds the raw markdown source of each page into the rendered HTML as a
-<script type="text/markdown" id="jc-page-source"> block.
+<textarea id="jc-page-source"> block.
 
 The llm-assist.js widget reads this directly — no fetch needed, no CORS
 issues, works identically on localhost and production.
@@ -93,11 +93,12 @@ def on_page_markdown(markdown: str, page, config, files, **kwargs) -> str:
 def on_page_content(html_content: str, page, config, files, **kwargs) -> str:
     """Inject the raw markdown source into every rendered page."""
     raw_md = page.markdown or ""
-    # Escape for safe embedding inside a script tag
+    # A hidden textarea, not a script: Material's instant navigation re-runs every
+    # <script> in the page as JavaScript (it drops their type), and a textarea's
+    # escaped text decodes back to the exact markdown.
     escaped = html.escape(raw_md, quote=False)
     injection = (
-        f'\n<script type="text/markdown" id="jc-page-source">'
-        f'{escaped}'
-        f'</script>\n'
+        '\n<textarea id="jc-page-source" hidden readonly aria-hidden="true" '
+        f'tabindex="-1" data-search-exclude>{escaped}</textarea>\n'
     )
     return html_content + injection
