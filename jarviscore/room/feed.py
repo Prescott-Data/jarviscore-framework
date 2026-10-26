@@ -62,7 +62,11 @@ def describe(event: Dict[str, Any]) -> str:
     if kind == "ask.finished" and event.get("status") == "superseded":
         return f"this version was not filed: {event.get('summary', '')}"
     if kind == "ask.finished":
-        tail = f" → {proposal} to review" if proposal else " with no changes to the files"
+        from jarviscore.nexus.providers import display_name
+
+        systems = [display_name(s) for s in event.get("systems") or ()]
+        tail = (f" → {proposal} to review" if proposal
+                else f" in {', '.join(systems)}" if systems else " with no changes to the files")
         return f"the agents finished ({event.get('status')}){tail}"
     if kind == "ask.failed":
         return f"the work stopped: {event.get('error', '')}"

@@ -797,3 +797,14 @@ def test_replies_reach_people_without_the_runtimes_receipt_ids():
     assert for_people("Done (receipt tool:wf-1:step-2:3). p-1a2b3c4d is in the thread.") == (
         "Done. p-1a2b3c4d is in the thread.")
     assert for_people("The receipts show nothing odd.") == "The receipts show nothing odd."
+
+
+def test_finished_work_says_where_it_was_done():
+    from jarviscore.room.feed import describe
+
+    assert describe({"type": "ask.finished", "status": "completed", "systems": ["claims_hub"]}) == \
+        "the agents finished (completed) in Claims Hub"
+    assert describe({"type": "ask.finished", "status": "completed", "proposal": "p-1"}) == \
+        "the agents finished (completed) → p-1 to review"
+    assert describe({"type": "ask.finished", "status": "completed"}) == \
+        "the agents finished (completed) with no changes to the files"

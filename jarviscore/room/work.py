@@ -270,7 +270,8 @@ async def finish(room: Room, mesh, workflow_id: str, result: Dict[str, Any]) -> 
         summary = str(result.get("result_summary") or result.get("error") or "")
         room.note("ask.finished", **_who(asked_by), workflow_id=workflow_id,
                   status=result.get("status"), summary=summary,
-                  proposal=proposal.id if proposal else "", held_for=held_for)
+                  proposal=proposal.id if proposal else "", held_for=held_for,
+                  systems=sorted({str(s.get("provider")) for s in sources or () if s.get("provider")}))
         return AskResult(workflow_id, str(result.get("status")), proposal, summary, result,
                          held_for, sources)
     finally:
