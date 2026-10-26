@@ -41,6 +41,7 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 - **Rooms ask for a missing account.** When room work needs a system the person who asked has not connected, that person is asked privately to connect it (`ChatSurface.show_connect`, a Nexus consent link), and the work goes on once they have. Before, the step waited with no one told.
 - **Room work in connected systems.** Asking a room's agents to act in a system (approve a claim, send a message) no longer has to produce a file to be planned.
 - **A room says why work did not finish.** The result of failed work now carries its reason (still shown only to its asker when it used their private access).
+- **No agent waits on a room's agent.** Other agents could ask a room's agent directly (`ask_capability`); it never answers peer requests, so the asker waited out the whole timeout (5 minutes). It is no longer offered as a peer, as it already was not for planning.
 - **The room agent starts work only in the room.** It no longer has the peer tools (`ask_peer`, `ask_capability`), which did work out of the room's sight and held the turn until the peer answered.
 - **Your own systems through Nexus.** A provider registered in Nexus with an `api_base_url` (an in-house claims or ERP system) can now be called on that host. Before, only hosts in the shipped catalogue were accepted, so its credential was refused everywhere.
 

@@ -414,6 +414,10 @@ async def test_the_room_agent_is_reached_by_people_not_routed_work(tmp_path, mon
         payload = P2PCoordinator._capability_payload(node)
         assert room_agent.agent_id not in payload["agents"]
         assert "room-conversation" not in payload["capabilities"]
+        # Nor can another agent ask it directly: it would never answer.
+        team = next(a for a in mesh.agents if a is not room_agent)
+        assert room_agent.agent_id not in {p["agent_id"] for p in team.peers.list_peers()}
+        assert team.peers.discover(capability="room-conversation") == []
     finally:
         await mesh.stop()
 
