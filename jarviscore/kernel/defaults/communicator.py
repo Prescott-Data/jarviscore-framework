@@ -244,11 +244,22 @@ Your job: transform raw data into clear, actionable output for your audience.
         if refusal:
             return refusal
 
+        from jarviscore.control.effects import Effect, EffectDenied, content_digest, mediated
+
+        effect = Effect("peer", "send", target=peer_role, origin="model", attributes=content_digest(message))
+        try:
+            with mediated(effect) as mediation:
+                return await self._deliver_to_peer(peer_role, message, priority, mediation)
+        except EffectDenied as exc:
+            return {"status": "error", "error": f"Not sent: {exc}", "semantic_error": "POLICY_REFUSED"}
+
+    async def _deliver_to_peer(self, peer_role: str, message: str, priority: str, mediation) -> Dict[str, Any]:
         if self.peers is not None:
             sent = await self.peers.notify(
                 peer_role,
                 {"message": message, "priority": priority},
             )
+            mediation.done(ok=bool(sent))
             return {
                 "status": "sent" if sent else "error",
                 "peer": peer_role,
@@ -266,8 +277,10 @@ Your job: transform raw data into clear, actionable output for your audience.
             )
             if hasattr(result, "__await__"):
                 result = await result
+            mediation.done(ok=True)
             return {"status": "sent", "peer": peer_role, "priority": priority}
         except Exception as e:
+            mediation.done(ok=False)
             return {"status": "error", "error": str(e)}
 
     # ─────────────────────────────────────────────────────────────
@@ -295,8 +308,14 @@ Your job: transform raw data into clear, actionable output for your audience.
                 os.makedirs(parent, exist_ok=True)
 
             write_mode = "a" if mode == "a" else "w"
-            with open(abs_path, write_mode, encoding="utf-8") as f:
-                f.write(content)
+            from jarviscore.control.effects import Effect, content_digest, mediated
+
+            with mediated(Effect(
+                "workspace", "append" if write_mode == "a" else "write", target=path, origin="model",
+                attributes=content_digest(content),
+            )):
+                with open(abs_path, write_mode, encoding="utf-8") as f:
+                    f.write(content)
 
             file_size = os.path.getsize(abs_path)
             return {

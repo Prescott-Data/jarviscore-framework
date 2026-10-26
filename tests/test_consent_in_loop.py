@@ -80,7 +80,7 @@ def coder(monkeypatch):
         {"slack_send_message": {"system": "slack", "code": ATOM_SOURCE}}
     )
 
-    def register_tool(name, fn, description, phase=None):
+    def register_tool(name, fn, description, phase=None, parameters=None):
         agent._tools[name] = (fn, description, phase)
 
     agent.register_tool = register_tool

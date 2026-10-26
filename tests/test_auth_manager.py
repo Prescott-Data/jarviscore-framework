@@ -252,7 +252,8 @@ class TestResolveStrategy:
         manager.nexus_client.resolve_strategy = AsyncMock(return_value=mock_strategy)
 
         await manager.resolve_strategy("conn_abc")
-        assert "conn_abc" in manager._strategy_cache
+        # Cached per person: a credential released for one is never served to another.
+        assert ("conn_abc", manager._person()) in manager._strategy_cache
         await manager.close()
 
 

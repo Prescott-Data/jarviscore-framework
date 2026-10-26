@@ -1,0 +1,48 @@
+id: agents-act-within-the-persons-scopes
+claim: >-
+  An agent working for a person does only what that person may do in their
+  organisation: a provider call or browser page that needs a scope the person
+  does not hold, or that goes beyond the limit of their scope, is refused before
+  it leaves, in report mode as in strict, whatever code makes it, and no
+  deployment rule lifts the refusal. An action whose requirement names
+  approved_by runs only with the approval of someone known to hold that scope,
+  within its limit for that exact request. Every decision records the
+  requirements and limits it was checked against.
+scope:
+  - Provider calls through NexusCallProxy and browser navigations and sends through the request broker, with CONTROL_MODE report or strict.
+  - Requirements in the control policy's scopes section that match the operation (method and path) or browser target.
+  - Work started with on_behalf_of or act_for, and its sub-agents, workflows and steps on other nodes.
+assumptions:
+  - The application names whom the work is for and what they hold, from its own authentication and roles.
+  - Approvers' scopes come from an assertion the application's backend signs, an Approver its code builds, or scopes.grants.
+  - The provider enforces each person's own permissions on their credential (scopes narrow, never widen, them).
+not_claimed:
+  - Scopes on effects other than provider calls and browser navigations and sends (memory, peers, code), unless a requirement names that sink.
+  - A requirement matched only by integration name holds other code reaching the same operation (match method and path for that).
+  - A browser page's reads of targets no scope names.
+  - That the person's scopes are true: they are what the application says.
+evidence:
+  - tests/test_scopes.py::test_a_person_does_what_their_scope_allows_and_is_refused_beyond_it_even_in_report_mode
+  - tests/test_scopes.py::test_a_limit_the_grant_does_not_state_is_refused_and_star_means_no_limit
+  - tests/test_scopes.py::test_a_value_the_request_does_not_carry_or_that_cannot_be_read_is_refused
+  - tests/test_scopes.py::test_a_report_goes_only_to_the_people_the_scope_names_every_one_of_them
+  - tests/test_scopes.py::test_reads_need_their_scope_too_and_work_for_no_one_holds_only_unattended
+  - tests/test_scopes.py::test_a_mandate_narrows_the_persons_scopes_for_one_piece_of_work_and_never_widens_them
+  - tests/test_scopes.py::test_no_deployment_rule_gives_a_person_a_scope
+  - tests/test_scopes.py::test_scopes_that_cannot_be_read_refuse_rather_than_allow
+  - tests/test_scopes.py::test_a_requirement_on_the_operation_holds_whatever_code_reaches_it
+  - tests/test_scopes.py::test_a_payment_needs_an_approver_who_holds_the_scope_within_its_limit
+  - tests/test_scopes.py::test_an_approved_by_scope_requires_an_approval_from_someone_known_to_hold_it
+  - tests/test_scopes.py::test_a_browser_page_the_person_may_not_open_is_refused_even_in_report_mode
+  - tests/test_scopes.py::test_work_for_bob_inside_work_for_ada_never_keeps_adas_mandate_or_scopes
+  - tests/test_scopes.py::test_a_deployment_deny_rule_never_softens_a_persons_refusal_in_report_mode
+  - tests/test_scopes.py::test_a_path_a_server_reads_as_the_operation_is_held_to_its_scope
+  - tests/test_browser_requests.py::test_a_page_the_person_may_not_read_is_refused_in_a_frame_or_fetch_too
+  - tests/test_browser_requests.py::test_a_browser_reused_by_another_persons_run_is_decided_for_that_person
+  - tests/test_scopes.py::test_scopes_travel_with_the_work_and_only_from_the_application
+  - tests/test_scopes.py::test_only_the_actions_whose_operations_match_wait_for_an_approved_by_approver
+  - tests/test_scopes.py::test_a_capability_the_person_may_not_use_is_shown_as_refused_and_never_run
+  - tests/test_approval_authority.py::test_an_approver_must_hold_the_approved_by_scope_and_the_broker_gets_what_they_hold
+  - tests/test_evidence_people.py::test_a_run_records_what_the_person_held_and_replays_with_it
+  - tests/test_on_behalf_of.py::test_a_chat_is_for_whom_the_application_authenticated_never_whom_the_client_claims
+published: []

@@ -1,0 +1,24 @@
+id: approved-actions-run-at-most-once
+claim: >-
+  An approved action is carried out at most once: starting it is claimed
+  atomically, the first decision on it stands, and a run that stops while
+  carrying it out leaves its outcome unknown until a person reconciles it; it is
+  never retried blindly. Where a provider deduplicates by key, retries of the
+  same operation carry the same key.
+scope:
+  - Consequential actions gated through jarviscore.kernel.approval with a Redis-backed store.
+  - Provider keys: Stripe, Adyen, Mollie, GoCardless, Checkout.com and PayPal headers; Square integrations' idempotency_key.
+assumptions:
+  - The provider honours its own idempotency contract.
+not_claimed:
+  - Exactly once for providers that offer no idempotency: the outcome of an interrupted call to them can only be reconciled by a person.
+evidence:
+  - tests/test_bound_approvals.py::test_the_first_decision_on_an_action_stands
+  - tests/test_bound_approvals.py::test_the_approved_arguments_run_once
+  - tests/test_approval_authority.py::test_an_action_interrupted_while_running_is_not_run_again
+  - tests/test_approval_authority.py::test_reconciling_as_not_performed_lets_it_run_once_more
+  - tests/test_approval_authority.py::test_reconciling_as_performed_records_what_happened
+  - tests/test_approval_authority.py::test_the_broker_refuses_a_call_that_needs_approval_and_carries_none
+  - tests/test_provider_broker.py::test_a_mutation_to_a_provider_that_deduplicates_carries_the_operation_id
+  - tests/test_provider_broker.py::test_a_square_payment_retried_carries_the_same_idempotency_key
+published: []

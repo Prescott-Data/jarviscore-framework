@@ -33,7 +33,7 @@ import json
 import logging
 import os
 import re
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, Tuple
 from urllib.parse import urlparse
 
 from jarviscore.contracts.hitl import HITLAction
@@ -285,6 +285,37 @@ _DOM_QUIET = """([quietMs, limitMs]) => new Promise(resolve => {
     setTimeout(finish, limitMs);
 })"""
 # Puts the values a person approved back on a reopened form; throws if any cannot be.
+def _form_destination(target: Any) -> str:
+    """Where a committing action's form sends, as host and path."""
+    from urllib.parse import urlsplit
+
+    element = (target or {}).get("element") if isinstance(target, dict) else None
+    action = (element or {}).get("form") if isinstance(element, dict) else None
+    if not action:
+        return ""
+    parts = urlsplit(str(action))
+    return f"{parts.netloc}{parts.path}" if parts.netloc else str(action)
+
+
+def _submitted_values(tool_name: str, target: Any) -> List[Tuple[str, str]]:
+    """The values a committing action sends, read from the page (or the fields it sets)."""
+    if not isinstance(target, dict):
+        return []
+    if tool_name == "click":
+        element = target.get("element") or {}
+        if element.get("form") and isinstance(element.get("fields"), list):
+            return [(str(name), str(value)) for name, value in element["fields"]]
+        return []
+    if tool_name == "fill_form" and target.get("submit"):
+        values = []
+        for field in target.get("fields") or []:
+            element = field.get("element") or {}
+            name = element.get("name") or element.get("id") or element.get("text") or "field"
+            values.append((str(name), str(field.get("value"))))
+        return values
+    return []
+
+
 _RESTORE_FORM = """({action, fields}) => {
     const form = Array.from(document.forms).find(f => f.action === action);
     if (!form) throw new Error('the approved form is not on this page');
@@ -522,9 +553,12 @@ select_option on a fresh snapshot ref, adding `"irreversible": true` and a `cons
 in the person's terms:
     click {"ref": "e14", "irreversible": true,
            "consequence": "Places the order for 3 items, £18.40, delivery Thu 10:00-12:00"}
-The runtime pauses there and shows the person that consequence. On approval it performs
-that exact action once and you observe the outcome on the page; a decline leaves it
-undone, and you report it that way. Browsing, searching, signing in, adding to a basket
+The runtime pauses there and shows the person that consequence, with the values the form
+will submit as they are on the page. So set every field the task names (fill_form) before
+the irreversible submit; the person approves those values, not your consequence. On
+approval it performs that exact action once and you observe the outcome on the page,
+with `submitted`: what the form carried. Report from that, never from what you meant to
+send; a decline leaves it undone, and you report it that way. Browsing, searching, signing in, adding to a basket
 and filling a form you have not yet submitted are reversible, and you carry them out
 directly.
 {code}
@@ -1020,6 +1054,23 @@ repair that part and continue. Current facts always come from this run.
             return None
 
     async def _execute_tool(self, tool_name: str, params: Dict) -> Dict[str, Any]:
+        broker = getattr(getattr(self, "_context", None), "_jc_request_broker", None)
+        mark = len(broker.sent) if broker is not None else 0
+        result = await self._execute_browser_tool(tool_name, params)
+        if broker is not None and isinstance(result, dict) and len(broker.sent) > mark:
+            # What actually left the browser during this action, from the request broker's
+            # record: an agent reports what its actions did, not what it meant them to do.
+            result = {**result, "sent": broker.sent[mark:]}
+        if isinstance(result, dict) and result.get("approved_action") and broker is not None:
+            went = [f"{item.get('method', '')} {item.get('to', '')}".strip()
+                    for item in result.get("sent") or [] if str(item.get("outcome", "")).startswith("sent")]
+            result = {**result, "left_the_browser": (
+                f"Only {', '.join(went)} left the browser during this action." if went
+                else "Nothing left the browser during this action."
+            ) + " Anything else it was described as doing did not happen through it."}
+        return result
+
+    async def _execute_browser_tool(self, tool_name: str, params: Dict) -> Dict[str, Any]:
         params = dict(params)
         if tool_name == "act" and params.get("irreversible") is True:
             return {
@@ -1067,21 +1118,36 @@ repair that part and continue. Current facts always come from this run.
                 }
             action_id = self.action_id(context, tool_name, target)
             where = self._page.url if self._page else "the current page"
+            submits = _submitted_values(tool_name, target)
+            description = self._describe_action(tool_name, params, target, where)
+            if submits:
+                # The values on the page, not the agent's account of them: what the person approves.
+                shown = ", ".join(f"{name}: {value}" for name, value in submits)
+                destination = _form_destination(target)
+                description = f"{description} (submits {shown[:400]}{f' to {destination}' if destination else ''})"
             action = HITLAction(
                 action_id=action_id,
                 tool=tool_name,
                 system="browser",
                 params=params,
-                description=self._describe_action(tool_name, params, target, where),
+                description=description,
                 consequence=consequence,
                 location=where,
                 target=target if isinstance(target, dict) else {},
             )
             workflow_id, step_id = context.get("workflow_id"), context.get("step_id")
-            refusal = approval.gate(self.redis_store, workflow_id, step_id, action)
+            refusal = approval.gate(
+                self.redis_store, workflow_id, step_id, action,
+                before=self._unperformed(self._current_state) if getattr(self, "_current_state", None) else None,
+            )
             if refusal is not None:
                 return refusal
             result = await super()._execute_tool(tool_name, params)
+            if isinstance(result, dict) and result.get("status") == "success":
+                # What the action was, as the runtime saw it: the agent reports this, not its own
+                # consequence (which it wrote, and which is not evidence of anything).
+                result = {**result, "approved_action": description,
+                          **({"submitted": dict(submits)} if submits else {})}
             approval.settle(self.redis_store, workflow_id, step_id, action_id, result)
             return result
         if await self._may_commit(tool_name, params):
@@ -1199,6 +1265,11 @@ repair that part and continue. Current facts always come from this run.
                 for key, value in (("locale", self.locale), ("timezone_id", self.timezone))
                 if value
             }
+            from jarviscore.control.policy import current_policy
+
+            if current_policy().mode == "strict":
+                # Requests a service worker makes are not seen by the request broker.
+                presented["service_workers"] = "block"
             if self.control_url:
                 if self.egress:
                     logger.info("[browser] An attached browser leaves from its own network; EGRESS_PROXY_URL is not applied")
@@ -1239,6 +1310,10 @@ repair that part and continue. Current facts always come from this run.
                     **presented,
                 )
                 self._page = await self._context.new_page()
+            from jarviscore.control.browser_requests import attach
+
+            # What pages send is decided and recorded where it leaves (control.browser_requests).
+            await attach(self._context)
             if not self._attached:
                 await self._present_as_browser()
             self._watch_requests(self._page)

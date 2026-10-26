@@ -134,6 +134,7 @@ nav:
         - Contracts and Boundaries: concepts/contracts.md
         - System Bundles & Atoms: concepts/system-bundles.md
         - Nexus: concepts/nexus.md
+        - Control and Evidence: concepts/control-and-evidence.md
   - Guides:
       - Overview: guides/index.md
       - Build the Agents:
@@ -155,6 +156,7 @@ nav:
       - Connect Capabilities:
         - Integrations: guides/integrations.md
         - Nexus Credentials: guides/nexus.md
+        - Acting for Your Users: guides/acting-for-your-users.md
         - Knowledge Base: guides/knowledge-base.md
         - Internet Search: guides/internet-search.md
         - Browser Automation: guides/browser-automation.md
@@ -166,6 +168,7 @@ nav:
         - Testing Atoms: guides/testing-atoms.md
         - AI Editor Setup: guides/ai-editors.md
         - Production Deployment: guides/production.md
+        - Turning On Control: guides/control-policy.md
   - Examples:
       - Overview: examples/index.md
       - Financial Pipeline: examples/financial-pipeline.md
@@ -176,6 +179,7 @@ nav:
   - Reference:
       - Overview: reference/index.md
       - Configuration: reference/configuration.md
+      - Control Policy: reference/control-policy.md
       - Agent API: reference/agent-api.md
       - Execution and Evidence API: reference/execution-api.md
       - Chat API: reference/chat-api.md
@@ -187,7 +191,7 @@ nav:
   - Enterprise: infrastructure/enterprise.md
 
 extra:
-  version: "2.4.1"
+  version: "3.0.0"
   social:
     - icon: material/web
       link: https://developers.prescottdata.io

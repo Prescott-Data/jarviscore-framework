@@ -1,0 +1,33 @@
+id: every-effect-is-decided-and-recorded
+claim: >-
+  Every effect an agent has outside its step, whether a provider call, a program
+  run in the sandbox, a command on the host, a file published, a change exported
+  or written, a memory kept, a message to another agent, or a step result
+  delivered, a page's navigation, or a request carrying data out of the browser, is
+  decided before it happens and recorded in a hash-linked journal
+  that jarviscore verify checks. In strict mode a refused effect does not happen.
+scope:
+  - The sinks listed in jarviscore/docs/concepts/control-and-evidence.md, and every raw sink call in the package, which a test enumerates.
+  - CONTROL_MODE report (recorded) and strict (recorded and enforced).
+assumptions:
+  - Agent code reaches the outside only through the framework's sinks, which holds for model code when it runs in a confined child (strict mode requires this, or a deployment rule that accepts the risk).
+  - The journal is switched on (JOURNAL_DIR) and its directory is not rewritten wholesale by its operator.
+not_claimed:
+  - WebSocket and WebRTC traffic from a page, data carried in a GET request's address, and requests a service worker makes where JarvisCore did not create the browser context.
+  - Commands a confined child runs inside its own workspace, which cannot reach the network or write outside it.
+  - What an application's own code does outside the framework.
+evidence:
+  - tests/test_effects_mediated.py::test_every_effect_sink_in_the_package_is_decided_on_or_classified
+  - tests/test_effects_mediated.py::test_every_mediated_sink_really_is_mediated_where_the_inventory_says
+  - tests/test_effects_mediated.py::test_an_effect_is_decided_then_attempted_then_its_outcome_recorded
+  - tests/test_effects_mediated.py::test_a_refused_effect_does_not_happen_and_the_refusal_is_on_record
+  - tests/test_effects_mediated.py::test_model_code_on_an_unconfined_host_is_not_run_in_strict_mode
+  - tests/test_effects_mediated.py::test_a_published_artifact_is_recorded_and_a_refused_one_stays_unpublished
+  - tests/test_effects_mediated.py::test_a_memory_write_is_recorded_and_a_refused_one_is_not_kept
+  - tests/test_effects_mediated.py::test_a_workspace_export_is_recorded_with_what_changed
+  - tests/test_effects_mediated.py::test_a_message_to_a_peer_is_recorded_and_a_refused_one_is_not_sent
+  - tests/test_effects_mediated.py::test_a_command_on_the_host_is_refused_in_strict_mode_and_recorded_in_report_mode
+  - tests/test_browser_requests.py::test_strict_mode_lets_a_page_send_to_its_own_site_and_stops_it_sending_elsewhere
+  - tests/test_browser_requests.py::test_report_mode_records_what_strict_would_refuse_and_holds_nothing
+  - tests/test_browser_requests.py::test_every_browser_context_the_package_creates_is_brokered
+published: []

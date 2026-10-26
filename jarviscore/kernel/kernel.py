@@ -1730,7 +1730,7 @@ class Kernel:
                     key: meta.get(key)
                     for key in (
                         "typed_outcome", "hitl_type", "system", "connection_id",
-                        "workflow_id", "step_id", "action_id", "action", "consequence",
+                        "workflow_id", "step_id", "action_id", "action", "consequence", "binding",
                         "progress",
                     )
                     if meta.get(key) is not None

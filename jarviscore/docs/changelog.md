@@ -33,6 +33,102 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 
 <div class="changelog-release" markdown>
 
+## 3.0.0 <span class="changelog-date">2026-10-26</span>
+
+### Added
+
+- **Control before every effect.** Every provider call, sandboxed program, host
+  command, artifact, workspace change, memory, peer message, step result and
+  browser request is decided on before it happens and recorded.
+  `CONTROL_MODE=report` (the default) records; `strict` refuses what policy does
+  not allow, and anything whose decision cannot be recorded. A control policy
+  file (`CONTROL_POLICY_PATH`) adds deployment rules, approval rules, grounding
+  and scopes. `jarviscore policy check | review | scopes` validates a policy, lists
+  what strict mode would refuse, and shows who may do what.
+  See [Turning On Control](guides/control-policy.md).
+- **Integrations are held to what their code sends.** Each integration's
+  operations are read from its source (914 of 1,186 shipped ones fully verified),
+  and code the model writes may only mutate a provider through operations its
+  own code verifiably sends.
+- **Approvals the institution decides.** `approvals:` rules set which actions need
+  a person, which roles may approve, maker-checker, and how strongly the approver
+  must be identified (`sign_assertion` for approvals signed by your backend). An
+  approved action runs at most once; one interrupted mid-run is left
+  `OUTCOME_UNKNOWN` for a person to reconcile. Payments to Stripe, Adyen, Mollie,
+  GoCardless, Checkout.com and PayPal carry an idempotency key.
+- **Grounding.** `grounding:` rules require a payment's account and amount (or any
+  field) to come from records the runtime itself read, so an instruction planted
+  in a document cannot redirect it. Live red team, strict mode: 0 of 14 attacks
+  succeeded. See [Grounding](concepts/control-and-evidence.md#grounding).
+- **Agents that act for your users.** `on_behalf_of=OnBehalfOf.of(tenant, user)`
+  on `run_task`, `execute_goal`, `submit_goal`, `workflow` and
+  `create_chat_router`: the work uses that user's own credentials (Nexus 0.7
+  releases a credential only to work for its owner, never falling back to
+  another), within what they delegated (a mandate), on any node, and every record
+  names them. `mesh.connect` starts a user's consent.
+  See [Agents That Act for Your Users](guides/acting-for-your-users.md).
+- **Your organisation's scopes.** A `scopes:` section says which operations need
+  which scope (approve claims, read financial reports, file a SAR), with limits
+  checked on the outgoing request; your application says what each person holds.
+  A request beyond them is refused, in report mode too, and the agent is told
+  what is out of reach. `approved_by` requires an approver holding a scope within
+  its limit. See [the guide](guides/acting-for-your-users.md#4-hold-them-to-your-organisations-scopes).
+- **A verifiable journal.** Decisions and effects are written as hash-linked
+  events; `jarviscore verify` checks a journal (or a copy) offline. `jarviscore
+  evidence acme/u_1` lists what agents did for a person or tenant, `--export`
+  hands it to their auditor (`verify --export`), and `--erase` removes a person's
+  replay content while the journal still verifies. Records hold methods, hosts,
+  paths and decisions, never bodies or credentials.
+- **Replay.** `jarviscore replay` re-runs a recorded agent run from its record,
+  every model call and tool answered from it, so nothing is called and nothing
+  acts, and reports whether the agent made the same decisions.
+  `JOURNAL_CAPTURE` and `JOURNAL_CONTENT_DAYS` (30) control what is kept.
+  See [Replay](concepts/control-and-evidence.md#replay).
+- **`claims/`**: each control and evidence claim with its scope, assumptions and
+  the tests behind it; a claim citing a missing test fails the build.
+
+### Changed
+
+- **Report mode refuses what a person may not do.** Requests beyond a person's
+  scopes or mandate are refused whatever the mode (except `off`); everything else
+  is still only recorded in report mode.
+- **Faster startup and calls.** `import jarviscore` takes about 0.13 s instead of
+  3 s, and each sandboxed run starts about 3 s sooner (a live coder step: median
+  8.9 s to 7.45 s). Provider calls reuse their connection
+  (`NEXUS_KEEPALIVE_SECONDS`): about 500 ms to 90 ms per call on HTTPS.
+- **Square integrations use a stable idempotency key**, so a retried payment is
+  not a new payment.
+
+### Fixed
+
+- **Agents report what their actions did.** An answer written after the budget ran
+  out, or after an approval, now rests on the run's record: a browser action's
+  result says what the form submitted and exactly what left the browser, and an
+  approval shows the values a form will submit.
+- **Repairing an integration that acts on the world no longer performs it**
+  (`ATOM_REPAIR_WOULD_ACT`).
+- **The coder sees every integration's real arguments**, and nobody is asked to
+  approve a call that is missing one (`ATOM_PARAMETERS_INVALID`). On a live payment
+  task: reaching approval 19/20 to 20/20, median 19.4 s to 8.7 s, input tokens
+  24.7k to 11.4k.
+
+### Removed
+
+- `CoderSandbox._execute_local`, unused, which gave generated code an undecided
+  `nexus_call`.
+
+### Upgrading from 2.4
+
+1. **Nothing is refused until you configure it.** Report mode (the default)
+   decides and records; it refuses only beyond a person's scopes or mandate,
+   which you set. Adopt strict mode with
+   [Turning On Control](guides/control-policy.md).
+2. **The journal is on by default** (`JOURNAL_DIR=.jarviscore/journal`), with
+   replay content (`JOURNAL_CAPTURE=full`) kept 30 days. Point it at durable
+   storage, or set `JOURNAL_CAPTURE=digests`, or `JOURNAL_DIR=off`.
+3. **Local Nexus:** `jarviscore nexus up` now runs v0.7.0. Set
+   `NEXUS_SUBJECT_BINDING=required` when agents act for your users.
+
 ## 2.4.1 <span class="changelog-date">2026-10-24</span>
 
 ### Fixed

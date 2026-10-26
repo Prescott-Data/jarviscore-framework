@@ -96,6 +96,8 @@ Everything else is optional and additive: `REDIS_URL` (distributed workflows, cr
 
 Verify a setup with `jarviscore check --validate-llm`, never by guessing.
 
+Control is on by default in `report` mode: every provider call and effect is decided and recorded in `JOURNAL_DIR` (nothing refused). `CONTROL_MODE=strict` with a policy file (`CONTROL_POLICY_PATH`) refuses what the policy does not allow; it needs a confined sandbox for model-written code. Check a policy with `jarviscore policy check`, and see what strict mode would refuse with `jarviscore policy review` before switching.
+
 ## CLI verbs
 
 ```
@@ -106,6 +108,9 @@ jarviscore memory status   # health of all memory tiers
 jarviscore nexus init      # zero-trust credential broker (Docker)
 jarviscore inspect [wf]    # read recorded traces: what did my agents do?
 jarviscore atom list       # inspect bundles and atoms in the installed catalog
+jarviscore verify          # check the journal: intact, every effect decided first
+jarviscore policy check    # does the control policy read as written?
+jarviscore policy review   # what strict mode would refuse, with what to do
 ```
 
 Use the installed catalog rather than a fixed integration count. See the
@@ -117,6 +122,7 @@ Use the installed catalog rather than a fixed integration count. See the
 - Failures are loud. Do not swallow exceptions in handlers; return `{"status": "failure", ...}` shapes or raise.
 - Credentials never enter agent reasoning. Use `requires_auth`/Nexus atoms, never put raw secrets in prompts or task strings.
 - Memory tiers are additive. Code must work with tiers absent; check for None rather than assuming Redis or Athena exists.
+- Effects go through the framework. Your own tool that acts on the world (email, database write) wraps the action in `jarviscore.control.effects.mediated(Effect(...))` so it is decided on and recorded; do not open raw network clients in agent code to get around a refusal. Never write a policy rule that allows something just to make a test pass in production config.
 
 ## Common mistakes
 
@@ -128,7 +134,9 @@ Use the installed catalog rather than a fixed integration count. See the
 - Treating distributed `status="completed"` as proof that every source obligation is satisfied.
 - Expecting `replan_goal()` to erase prior attempts; revisions are append-only.
 - Assuming P2P works without the `[p2p]` extra installed.
+- Treating `POLICY_WOULD_REFUSE`, `POLICY_REFUSED` or `error_type: PolicyDenied` as transient. They are the deployment's policy, not failures to retry; do not build retry loops around them.
+- Expecting strict mode to run model code on a host without sandbox confinement (Linux containers without bubblewrap): it refuses unless an `effects` rule allows `{sink: code}`.
 
 ## Deeper documentation
 
-Full docs: https://jarviscore.developers.prescottdata.io/ (guides for workflows, HITL, browser automation, RAG, FastAPI integration, observability, production deployment).
+Full docs: https://jarviscore.developers.prescottdata.io/ (guides for workflows, HITL, browser automation, RAG, FastAPI integration, observability, production deployment, turning on control; the control policy reference).

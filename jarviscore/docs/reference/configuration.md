@@ -381,6 +381,7 @@ Required only when agents call third-party services (GitHub, Slack, Jira, Stripe
 | `NEXUS_BROKER_URL` | (none) | Broker URL, e.g. `http://localhost:8080`. Used by dashboard and SDK to POST credentials directly to the Broker's `/auth/capture-credential` endpoint for non-OAuth providers. |
 | `NEXUS_RETURN_URL` | `http://localhost:8000/oauth/callback` | OAuth callback URL; the Nexus broker redirects here after consent. |
 | `NEXUS_DEFAULT_USER_ID` | `jarviscore-agent` | User identity passed to Nexus for credential lookups. |
+| `NEXUS_SUBJECT_BINDING` | `optional` | For `jarviscore nexus up`: the broker's `SUBJECT_BINDING`. `required` releases a credential only to work naming the person who owns it; use it when agents act for your users ([guide](../guides/acting-for-your-users.md#3-make-nexus-hold-you-to-it)). |
 | `AUTH_STRATEGY_CACHE_TTL` | `300` | Seconds before the resolved auth strategy is re-fetched from the Gateway. |
 | `AUTH_FLOW_TIMEOUT` | `300` | Maximum seconds to wait for a user to complete OAuth browser consent. |
 | `AUTH_POLL_INTERVAL` | `2.0` | Seconds between Gateway status polls during an OAuth flow. |
@@ -395,6 +396,21 @@ jarviscore nexus test github
 ```
 
 The local stack's own secrets (`NEXUS_ENCRYPTION_KEY`, `NEXUS_STATE_KEY`, `NEXUS_BROKER_API_KEY`) live in `~/.jarviscore/nexus/stack.env` and are read by the broker and gateway containers only. Do not put them in a project `.env`.
+
+### Control and evidence
+
+How provider calls are decided on and recorded. See [Control and Evidence](../concepts/control-and-evidence.md).
+
+| Variable | Default | Description |
+|---|---|---|
+| `CONTROL_MODE` | `report` | `off`: provider calls and other effects are neither decided on nor recorded. `report`: decided and recorded; refused only when beyond what the person the work is for may do (mandate, scopes). `strict`: refused before they happen when policy does not allow them, and refused when their decision cannot be recorded; needs a confined sandbox for model-written code. `JARVISCORE_CONTROL_MODE` overrides it at run time. See [Turning On Control](../guides/control-policy.md). |
+| `CONTROL_POLICY_PATH` | (none) | JSON or YAML file of deployment rules: `deny` rules refuse more; an `allow` rule can lift only the refusal of a mutation that does not come from an integration. `approvals:` decides who may approve; `grounding:` holds request fields to records the runtime read; `effects:` decides on every other effect; `principals:` gives approvers roles; `scopes:` says which operations need which of your organisation's scopes. Full schema: [Control Policy Reference](control-policy.md); check a file with `jarviscore policy check`, list who may do what with `jarviscore policy scopes`. A file that cannot be read refuses every call and every effect. `JARVISCORE_CONTROL_POLICY` overrides it at run time. |
+| `JOURNAL_DIR` | `.jarviscore/journal` | Where the hash-linked journal of decisions, provider calls and other effects is written; `off` writes none (and strict mode then cannot record its decisions). Check it with `jarviscore verify`; `jarviscore policy review` lists what strict mode would refuse; `jarviscore evidence <person>` what was done for someone. `JARVISCORE_JOURNAL_DIR` overrides it at run time. |
+| `JOURNAL_CAPTURE` | `full` | What each agent run keeps for replay: `full` (model calls, gate and tool results, content-addressed beside the journal), `digests` (verifiable, not replayable) or `off`. `JARVISCORE_JOURNAL_CAPTURE` overrides it. See [Replay](../concepts/control-and-evidence.md#replay). |
+| `JOURNAL_CONTENT_DAYS` | `30` | Days replay content is kept after its last use; older content is erased in the background, at most once a day, by processes that record agent runs with `full` capture. `0` keeps it. The journal still verifies; those runs can no longer be replayed. `JARVISCORE_JOURNAL_CONTENT_DAYS` overrides it. |
+| `NEXUS_KEEPALIVE_SECONDS` | `120` | Seconds an idle provider connection is kept for the next call, so calls reuse TLS instead of opening a connection each time. |
+| `APPROVAL_ASSERTION_KEY` | (none) | Key approval assertions are verified with (key id `default`). Your approving backend holds the same key and signs with `control.approvals.sign_assertion` after its own sign-in. |
+| `APPROVAL_ASSERTION_KEYS` | `{}` | JSON map of key id to key, for rotating assertion keys. |
 
 ---
 

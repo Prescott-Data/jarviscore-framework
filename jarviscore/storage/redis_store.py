@@ -16,6 +16,7 @@ import redis
 from jarviscore.storage.errors import RoomStateChanged  # noqa: F401 (raised here, caught by rooms)
 
 from jarviscore.contracts.hitl import (
+    APPROVED_DECISIONS,
     HITLRequest,
     HITLResolution,
     HITLStatus,
@@ -1819,13 +1820,15 @@ class RedisContextStore:
                 interpretations[str(dependency_id)] = interpretation
         return interpretations
 
-    def init_workflow_graph(self, workflow_id: str, steps: List[Dict]) -> bool:
-        """Initialize Redis DAG for a workflow."""
+    def init_workflow_graph(self, workflow_id: str, steps: List[Dict],
+                            context: Optional[Dict[str, Any]] = None) -> bool:
+        """Initialize Redis DAG for a workflow; ``context`` is registered with its definition."""
         return self.publish_workflow(
             workflow_id,
             goal="",
             obligations=[],
             steps=steps,
+            context=context,
         )
 
     def get_step_status(self, workflow_id: str, step_id: str) -> Optional[str]:
@@ -3021,17 +3024,23 @@ class RedisContextStore:
 
     def resolve_hitl_action_once(self, workflow_id: str, step_id: str, action_id: str,
                                  decision: str, responder: str = "",
-                                 comment: str = "") -> Optional[bool]:
+                                 comment: str = "",
+                                 approver: Optional[Dict[str, Any]] = None) -> Optional[bool]:
         """Decide a waiting consequential action atomically: True if this call decided
-        it, False if it was already decided, None if there is no such request."""
+        it, False if it was already decided, None if there is no such request.
+        ``approver`` (subject, roles, assurance, how they were authenticated) is kept
+        with the decision."""
         normalized = normalize_hitl_decision(decision).value
-        won = self._close_hitl(workflow_id, step_id, {
+        fields = {
             "status": HITLStatus.resolved.value,
             "decision": normalized,
             "responder": responder, "comment": comment,
             "resolved_by": responder, "note": comment,
             "resolved_at": str(time.time()),
-        }, action_id=action_id)
+        }
+        for name, value in (approver or {}).items():
+            fields[name] = json.dumps(value) if isinstance(value, (list, dict)) else str(value)
+        won = self._close_hitl(workflow_id, step_id, fields, action_id=action_id)
         if won:
             self.append_ledger_entry(workflow_id, {
                 "event": "hitl_resolved", "step_id": step_id,
@@ -3120,6 +3129,51 @@ class RedisContextStore:
                 requests.append(raw)
         return requests
 
+    def claim_hitl_execution(self, workflow_id: str, step_id: str, action_id: str) -> Optional[bool]:
+        """Mark an approved, unsettled action as being carried out, atomically.
+
+        True if this call claimed it; False if it is not approved, already settled,
+        or already being carried out (perhaps by a run that stopped half way, in
+        which case its outcome is unknown); None if there is no such request.
+        """
+        key = self._hitl_key(workflow_id, step_id, action_id)
+        approved = {decision.value for decision in APPROVED_DECISIONS}
+        with self._redis.pipeline() as pipe:
+            while True:
+                try:
+                    pipe.watch(key)
+                    if not pipe.exists(key):
+                        pipe.unwatch()
+                        return None
+                    status, decision, outcome, executing = pipe.hmget(
+                        key, "status", "decision", "outcome", "executing_at"
+                    )
+                    if (
+                        status != HITLStatus.resolved.value or decision not in approved
+                        or outcome is not None or executing is not None
+                    ):
+                        pipe.unwatch()
+                        return False
+                    pipe.multi()
+                    pipe.hset(key, "executing_at", str(time.time()))
+                    pipe.execute()
+                    return True
+                except redis.WatchError:
+                    continue
+
+    def release_hitl_execution(self, workflow_id: str, step_id: str, action_id: str) -> None:
+        """An action refused before it acted changed nothing; it may be carried out again."""
+        self._redis.hdel(self._hitl_key(workflow_id, step_id, action_id), "executing_at")
+
+    def reopen_hitl_action(self, workflow_id: str, step_id: str, action_id: str, reason: str) -> None:
+        """Put a decided action back before a person: its approver no longer meets policy."""
+        key = self._hitl_key(workflow_id, step_id, action_id)
+        self._redis.hset(key, mapping={
+            "status": HITLStatus.pending.value, "reopened_because": reason,
+        })
+        self._redis.hdel(key, "decision", "resolved_by", "responder", "approver",
+                         "approver_roles", "approver_scopes", "assurance", "authenticated_by", "resolved_at")
+
     def settle_hitl_action(self, workflow_id: str, step_id: str,
                            action_id: str, outcome: Dict[str, Any]) -> None:
         """Bind what became of a decided action to the decision itself."""
@@ -3128,6 +3182,7 @@ class RedisContextStore:
             "outcome": json.dumps(outcome, default=str),
             "settled_at": str(time.time()),
         })
+        self._redis.hdel(key, "executing_at")
         self.append_ledger_entry(workflow_id, {
             "event": "hitl_action_settled", "step_id": step_id,
             "action_id": action_id, "status": str(outcome.get("status") or ""),

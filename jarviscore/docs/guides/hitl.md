@@ -278,6 +278,101 @@ marked as done. See
 These approvals need a started, Redis-backed Mesh; without durable workflow
 state the action is refused with `APPROVAL_UNAVAILABLE`.
 
+Where the control policy has [grounding](../concepts/control-and-evidence.md#grounding)
+rules (a payment's IBAN must be the one on the supplier record, say), the action
+is previewed before anyone is asked. One strict policy would refuse is never put
+to a person (`POLICY_WOULD_REFUSE`); otherwise the request's `payload.checks`
+shows what was checked and which records the values came from, for your review
+surface to display next to the action.
+
+### Who may approve
+
+Which actions need a person is the institution's decision. An integration's own
+`approval` setting is the default; `approvals:` rules in the control policy file
+(`CONTROL_POLICY_PATH`) can require approval where it said "never", require roles,
+keep the person who asked from approving their own request, and set how strongly
+the approver's identity must be established. They can waive approval for anything
+except a destructive action.
+
+```yaml
+approvals:
+  - name: payments-need-finance
+    match: {provider: erp, effect: [write, destructive]}
+    roles: [finance_approver]        # any of these
+    distinct_from: [requester]       # maker-checker: not the person the run acts for
+    assurance: verified              # unauthenticated | asserted | verified
+  - name: our-crm-is-ours
+    match: {provider: hubspot, effect: write}
+    require: none                    # no approval (never for a destructive action)
+principals:                          # roles for approvers whose sign-in carries none
+  bank/carol: [finance_approver]     # the same person key work is done for
+```
+
+How the approver is known decides their assurance:
+
+| Passed to `resolve_hitl` | Assurance | When to use it |
+|---|---|---|
+| `assertion=` | `verified` | Your backend signed the decision after its own sign-in (below) |
+| `approver=Approver(...)` | `asserted` | Your code, in the same process, established who decided |
+| `resolved_by="..."` | `unauthenticated` | A name, nothing more |
+
+An approval assertion is signed by your backend with a key it shares with the
+deployment (`APPROVAL_ASSERTION_KEY`), over the person, their decision and the
+exact action (`binding` in the waiting step's result). It cannot be reused for
+another action or decision, and it is refused after 15 minutes.
+
+```python
+from jarviscore.control.approvals import sign_assertion
+
+result = await mesh.execute_goal(...)         # or resume_goal / run_task
+waiting = result["waiting"]["metadata"]       # workflow_id, action_id, consequence, binding
+
+# On your backend, after your own sign-in, when the person presses Approve:
+token = sign_assertion(
+    APPROVAL_ASSERTION_KEY,
+    subject=user.person_key, roles=user.roles, decision="approved",   # e.g. "bank/carol"
+    workflow_id=waiting["workflow_id"], action_id=waiting["action_id"],
+    binding=waiting["binding"],
+)
+await mesh.resolve_hitl(waiting["workflow_id"], waiting["action_id"],
+                        decision="approved", assertion=token)
+```
+
+Use the same identity for the approver as for whom work is done (the person key
+you pass as `on_behalf_of`, such as `bank/carol`): `distinct_from: [requester]`
+compares the two, so an approver named some other way (an email) is never
+recognised as the person who asked.
+
+Where an action's [scope requirement](acting-for-your-users.md#4-hold-them-to-your-organisations-scopes)
+names `approved_by`, pass the approver's scopes too (`sign_assertion(..., scopes=...)`):
+only someone who holds that scope may approve, and their limit is checked against
+the request when the action runs.
+
+An approval the policy does not accept raises `ApprovalRefused` and is recorded;
+anyone may decline. The approver is checked again when the action is about to
+run, under the policy in force then: if it was tightened since, the action goes
+back to a person.
+
+### When a run stops while carrying an action out
+
+Starting an approved action is claimed once. If the run stops before its outcome
+is recorded (a crash, a lost connection), nobody knows whether it happened, so it
+is not run again: the agent gets `OUTCOME_UNKNOWN`. Check the provider, then say
+what you found:
+
+```python
+# It happened: record what it did, and it never runs again.
+await mesh.reconcile_hitl(workflow_id, action_id, performed=True,
+                          outcome={"status": "success", "data": {"ref": "PAY-9"}},
+                          resolved_by="ops@example.com")
+
+# It did not happen: it may be carried out once more.
+await mesh.reconcile_hitl(workflow_id, action_id, performed=False, resolved_by="ops@example.com")
+```
+
+Every request, decision, refusal, claim, outcome and reconciliation is written
+to the [journal](../concepts/control-and-evidence.md#the-journal).
+
 ---
 
 ## Review Persistence

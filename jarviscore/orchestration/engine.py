@@ -157,7 +157,10 @@ class WorkflowEngine:
 
         # ── Fresh start ──────────────────────────────────────────────
         if self.redis_store:
-            self.redis_store.init_workflow_graph(workflow_id, normalized)
+            from jarviscore.auth.principal import registered
+
+            # Steps another node runs act for the same person, within the same mandate.
+            self.redis_store.init_workflow_graph(workflow_id, normalized, context=registered())
             self.redis_store.register_active_workflow(workflow_id)
 
         state = WorkflowState(
@@ -500,20 +503,36 @@ class WorkflowEngine:
         if isinstance(result, dict) and "agent" not in result:
             result["agent"] = agent.agent_id
 
+        from jarviscore.control.effects import Effect, EffectDenied, content_digest, mediated
+
+        status = result.get("status", "unknown") if isinstance(result, dict) else "unknown"
+        # Delivering the step's result to the steps and caller after it is an effect.
+        try:
+            with mediated(
+                Effect("output", "deliver", target=str(step_id), agent=agent.agent_id,
+                       attributes={"status": str(status), **content_digest(result)}),
+                workflow_id=workflow_id, step_id=step_id,
+            ):
+                pass
+        except EffectDenied as exc:
+            return {"status": "failure", "error": f"Result not delivered: {exc}", "step_id": step_id,
+                    "semantic_error": "POLICY_REFUSED", "agent": agent.agent_id}
+
         # P2P broadcast (best-effort, never fails the step)
         if self.p2p and hasattr(self.p2p, "broadcaster"):
             try:
-                broadcast_status = (
-                    result.get("status", "unknown")
-                    if isinstance(result, dict)
-                    else "unknown"
-                )
-                await self.p2p.broadcaster.broadcast_step_result(
-                    step_id=step_id,
-                    workflow_id=workflow_id,
-                    output_data=result,
-                    status=broadcast_status,
-                )
+                # Every peer on the network receives it: decided and recorded like any send.
+                with mediated(
+                    Effect("peer", "broadcast", target="*", agent=agent.agent_id,
+                           attributes={"status": str(status), **content_digest(result)}),
+                    workflow_id=workflow_id, step_id=step_id,
+                ):
+                    await self.p2p.broadcaster.broadcast_step_result(
+                        step_id=step_id,
+                        workflow_id=workflow_id,
+                        output_data=result,
+                        status=status,
+                    )
             except Exception as err:
                 logger.warning(f"Broadcast failed for {step_id}: {err}")
 

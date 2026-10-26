@@ -208,6 +208,31 @@ class Settings(BaseSettings):
     # Let the router answer a task that needs no role (no tools, data or effects)
     # in the same call, when it runs on the model the communicator would use.
     kernel_router_may_answer: bool = True
+
+    # === Control and evidence ===
+    # How provider calls are decided on before they leave: "off" (not decided or
+    # recorded), "report" (decided and recorded, never refused) or "strict"
+    # (refused before any I/O when policy says so).
+    control_mode: str = "report"
+    # Deployment rules (JSON or YAML) that refuse more, or lift a built-in refusal.
+    control_policy_path: Optional[str] = None
+    # Where the hash-linked journal of decisions and provider calls is written;
+    # "off" writes none.
+    journal_dir: Optional[str] = runtime_path("journal")
+    # What each agent run keeps for replay beside the journal: "full" (model calls,
+    # gate and tool results, content-addressed; the chain holds their digests),
+    # "digests" (digests only: verifiable, not replayable) or "off".
+    journal_capture: str = "full"
+    # Days replay content is kept after its last use; older content is erased in the
+    # background (the chain holds digests, so verify still passes). 0 keeps it all.
+    journal_content_days: int = 30
+    # Seconds an idle provider connection is kept for the next call (TLS reuse).
+    nexus_keepalive_seconds: float = 120.0
+    # Keys approval assertions are verified with: one key (key id "default"), or
+    # a JSON map of key id to key for rotation. Hold the same on the backend that
+    # signs them after its own sign-in (control.approvals.sign_assertion).
+    approval_assertion_key: Optional[str] = None
+    approval_assertion_keys: Dict[str, str] = {}
     typesafe_router_min_confidence: float = 0.5
     task_complexity_provider: str = "llm"
     typesafe_complexity_min_confidence: float = 0.5

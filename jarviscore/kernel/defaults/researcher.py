@@ -2346,7 +2346,12 @@ DOCUMENTATION TEXT:
                 "--",
                 path,
             ]
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            from jarviscore.control.effects import Effect, mediated
+
+            # A fixed program on the host, reading inside the workspace; recorded like any process.
+            with mediated(Effect("process", "run", target="rg", origin="runtime",
+                                 attributes={"confined": False, "reads": str(path)})):
+                proc = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
             for line in proc.stdout.splitlines():
                 if len(matches) >= max_results:
                     break

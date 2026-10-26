@@ -59,6 +59,7 @@ def create_chat_router(
     kernel,
     prefix: str = "",
     tags: Optional[List[str]] = None,
+    on_behalf_of=None,
 ):
     """
     Create a FastAPI router with chat + SSE trace endpoints.
@@ -67,6 +68,12 @@ def create_chat_router(
         kernel: Kernel instance (jarviscore.kernel.kernel.Kernel)
         prefix:  Optional route prefix (added in addition to app.include_router prefix)
         tags:    FastAPI tag list for OpenAPI docs
+        on_behalf_of: Your application's answer to "whom is this chat for?":
+                 ``(request) -> OnBehalfOf | Person | str | None`` (sync or async),
+                 read from your own authentication. Raise ``HTTPException(401)``
+                 there to refuse unauthenticated chats. Each chat then works with
+                 that person's credentials, within their mandate, named on every
+                 record. Whom a chat is for is never taken from the request body.
 
     Returns:
         APIRouter ready for app.include_router()
@@ -108,7 +115,7 @@ def create_chat_router(
     # ──────────────────────────────────────────────────────────────────────
 
     @router.post("/chat", response_model=ChatResponse)
-    async def chat(req: ChatRequest):
+    async def chat(req: ChatRequest, request: Request):
         """
         Send a message to the agent and get an answer.
 
@@ -126,18 +133,30 @@ def create_chat_router(
         step_id = f"step_{int(time.time())}_{uuid.uuid4().hex[:8]}"
 
         context: Dict[str, Any] = dict(req.context or {})
+        # Whom the work is for comes from the application's authentication, never the client.
+        for authority in ("acting_for", "mandate", "scopes"):
+            context.pop(authority, None)
         context["workflow_id"] = workflow_id
         context["step_id"] = step_id
+        principal = None
+        if on_behalf_of is not None:
+            principal = await _resolve(request)
+            # A conversation is its starter's: continuing someone else's would inherit their memory.
+            if not _claim(workflow_id, _person(principal)):
+                return JSONResponse(status_code=403, content={"error": "This conversation belongs to someone else."})
 
         logger.info("[chat] workflow=%s message=%s", workflow_id, req.message[:80])
 
+        from jarviscore.auth.principal import act_for
+
         try:
-            output = await kernel.execute(
-                task=req.message,
-                system_prompt=req.system_prompt or "",
-                context=context,
-                agent_id=req.agent_id or "chat",
-            )
+            with act_for(principal):
+                output = await kernel.execute(
+                    task=req.message,
+                    system_prompt=req.system_prompt or "",
+                    context=context,
+                    agent_id=req.agent_id or "chat",
+                )
         except Exception as exc:
             logger.error("[chat] Kernel execute failed: %s", exc, exc_info=True)
             return JSONResponse(
@@ -168,6 +187,23 @@ def create_chat_router(
     # GET /chat/stream/{workflow_id} — SSE
     # ──────────────────────────────────────────────────────────────────────
 
+    async def _resolve(request):
+        import inspect
+
+        from jarviscore.auth.principal import on_behalf_of as resolve
+
+        found = on_behalf_of(request)
+        return resolve(await found if inspect.isawaitable(found) else found)
+
+    async def _forbidden(request, workflow_id: str):
+        """Who may read a conversation's trace: with a resolver, only whoever it belongs to."""
+        if on_behalf_of is None:
+            return None
+        owner = _owner(workflow_id)
+        if owner is None or owner != _person(await _resolve(request)):
+            return JSONResponse(status_code=403, content={"error": "This conversation belongs to someone else."})
+        return None
+
     @router.get("/chat/stream/{workflow_id}")
     async def chat_stream(workflow_id: str, request: Request):
         """
@@ -192,6 +228,9 @@ def create_chat_router(
             const es = new EventSource(`/chat/stream/${workflowId}`)
             es.onmessage = e => console.log(JSON.parse(e.data))
         """
+        refused = await _forbidden(request, workflow_id)
+        if refused is not None:
+            return refused
         return StreamingResponse(
             _sse_generator(workflow_id, request),
             media_type="text/event-stream",
@@ -207,13 +246,16 @@ def create_chat_router(
     # ──────────────────────────────────────────────────────────────────────
 
     @router.get("/chat/history/{workflow_id}/{step_id}")
-    async def chat_history(workflow_id: str, step_id: str):
+    async def chat_history(workflow_id: str, step_id: str, request: Request):
         """
         Return the full buffered trace event log for a past step.
 
         Useful for replaying a conversation's trace in a UI without
         maintaining an SSE connection.
         """
+        refused = await _forbidden(request, workflow_id)
+        if refused is not None:
+            return refused
         from jarviscore.kernel.tracing import TraceManager, DEFAULT_TRACE_DIR
         try:
             tm = TraceManager.__new__(TraceManager)
@@ -327,6 +369,39 @@ async def _sse_generator(
 # ─────────────────────────────────────────────────────────────────────────────
 
 _redis_singleton = None
+
+
+_OWNERS: Dict[str, str] = {}
+_OWNER_TTL_SECONDS = 30 * 86400
+
+
+def _person(principal) -> str:
+    return principal.person if principal is not None else ""
+
+
+def _owner(workflow_id: str) -> Optional[str]:
+    """Whom a conversation belongs to ("" for no one), or None when it was never started here."""
+    client = _get_redis()
+    if client is not None:
+        try:
+            return client.get(f"chat_owner:{workflow_id}")
+        except Exception as exc:  # noqa: BLE001 - unknown owner: refused
+            logger.warning("Chat owner lookup failed: %s", exc)
+            return None
+    return _OWNERS.get(workflow_id)
+
+
+def _claim(workflow_id: str, person: str) -> bool:
+    """Make ``person`` the owner of a new conversation; True when it is (or already was) theirs."""
+    client = _get_redis()
+    if client is not None:
+        try:
+            client.set(f"chat_owner:{workflow_id}", person, nx=True, ex=_OWNER_TTL_SECONDS)
+            return client.get(f"chat_owner:{workflow_id}") == person
+        except Exception as exc:  # noqa: BLE001 - cannot tell whose it is: refused
+            logger.warning("Chat owner claim failed: %s", exc)
+            return False
+    return _OWNERS.setdefault(workflow_id, person) == person
 
 
 def _get_redis():

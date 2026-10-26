@@ -1,0 +1,23 @@
+id: model-code-within-own-contract
+claim: >-
+  In strict mode, code the model writes or repairs can change a provider only
+  through operations its own code verifiably sends, within the effect it
+  declares, and only with a person's approval of that exact action; anything
+  else is refused before it leaves. An integration that acts on the world is
+  never repaired or proven by performing its effect.
+scope:
+  - control_mode=strict; calls from the coder's sandbox through NexusCallProxy.
+assumptions:
+  - Provider credentials are reachable only through NexusCallProxy.
+not_claimed:
+  - That the declared effect is the right one for the task; that is the approval step's job.
+evidence:
+  - tests/test_provider_broker.py::test_model_written_code_outside_its_contract_is_refused
+  - tests/test_control_policy.py::test_model_written_code_may_only_send_operations_its_own_code_names
+  - tests/test_control_policy.py::test_model_written_code_with_an_unverified_contract_may_not_mutate
+  - tests/test_atom_only_provider_access.py::test_an_atom_call_reaches_the_broker_with_its_authority_and_contract
+  - tests/test_process_isolation.py::test_generated_code_cannot_mutate_provider_through_raw_nexus_call
+  - tests/test_control_policy.py::test_model_written_code_never_acts_without_an_approval_of_that_action
+  - tests/test_effects_need_approval.py::test_repairing_a_write_integration_cannot_perform_the_effect
+  - tests/test_effects_need_approval.py::test_a_call_missing_its_arguments_is_refused_before_anyone_is_asked
+published: []

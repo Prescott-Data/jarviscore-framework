@@ -23,6 +23,10 @@ Commands:
   memory      Manage agent memory infrastructure
   atom        Validate, test, and list integration atoms
   inspect     Read recorded traces from past runs
+  verify      Check the journal of decisions and effects
+  policy      Check a control policy file; review what strict mode would refuse; who may do what
+  replay      Re-simulate recorded agent runs from the journal, every effect stubbed
+  evidence    What agents did for a person or tenant; export it for their auditor
   human       Join the mesh as a person
   room        Work together on a shared workspace
 ```
@@ -536,3 +540,123 @@ jarviscore inspect wf-2024 --step analyze
 | `--errors` | flag | off | Only show failures and recoveries |
 
 See [Observability](../guides/observability.md) for how traces are recorded and what each event means.
+
+---
+
+## jarviscore verify
+
+Checks the journal of decisions and effects (provider calls and every other
+mediated effect), offline. It needs no keys and
+no network, so it runs the same on a copy handed to an auditor.
+
+```bash
+# This deployment's journal (JOURNAL_DIR)
+jarviscore verify
+
+# A copy somewhere else
+jarviscore verify /path/to/journal
+
+# The report as JSON
+jarviscore verify --json
+
+# An export of one person's or tenant's runs (jarviscore evidence --export)
+jarviscore verify --export /path/to/export
+```
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `journal_dir` | `str` | `JOURNAL_DIR` (`./.jarviscore/journal`) | Journal to check |
+| `--json` | flag | off | Print the report as JSON (with `problems` and `notes`) |
+| `--export` | flag | off | Check an export: runs it left out are expected missing. A plain `verify` refuses an export |
+
+Notes (not problems) report a run still being written or events after a run's
+registered head.
+
+It checks each run's hash chain, that each run ends where the head log
+registered it, that every effect followed an allow decision, and that every
+grounded call cites reads that are in the record. Exit
+status: `0` intact, `1` problems found, `2` no journal. See
+[Control and Evidence](../concepts/control-and-evidence.md) for what it detects and what it does not yet.
+
+---
+
+## jarviscore replay
+
+Re-simulates recorded agent runs from the journal. Every model call, gate and
+tool is answered from the record, so nothing is called and nothing acts.
+
+```bash
+jarviscore replay                        # every recorded run in JOURNAL_DIR
+jarviscore replay /path/to/journal wf-12/pay
+jarviscore replay --json
+```
+
+A run reproduces when the agent makes the same decisions and ends the same way;
+otherwise the report names the first decision where it diverged. Exit status:
+`0` all reproduced, `1` any diverged, `2` nothing to replay. Needs
+`JOURNAL_CAPTURE=full` (the default). See [Replay](../concepts/control-and-evidence.md#replay).
+
+---
+
+## jarviscore evidence
+
+What agents did for one person, or for everyone in a tenant (a key ending in
+`/`), from the journal; export it for an auditor; erase a person's replay content.
+
+```bash
+jarviscore evidence acme/u_123                       # each run, decision and approval for them
+jarviscore evidence acme/ /path/to/journal --json    # a whole tenant, as JSON
+jarviscore evidence acme/ --export acme-evidence/    # copy those runs, verifiable on their own
+jarviscore evidence acme/ --export out/ --content    # ... with replay content (personal data)
+jarviscore evidence acme/u_123 --erase               # what erasing their replay content removes
+jarviscore evidence acme/u_123 --erase --yes         # erase it
+```
+
+| Option | Description |
+|---|---|
+| `who` | A person key (`acme/u_123`) or a tenant (`acme/`) |
+| `journal_dir` | Default `JOURNAL_DIR` |
+| `--export DIR` | Copy their runs and the head log into an empty `DIR`, with `export.json`; runs shared with others are left out and listed |
+| `--content` | With `--export`: also copy the content replay needs |
+| `--erase [--yes]` | Count, then erase, the replay content only their runs used; the journal still verifies |
+| `--json` | JSON output |
+
+Exit status: `0`; `1` when no person or tenant is given; `2` when there is no
+journal, nothing was done for them, or the `--export` directory is not empty.
+See [Agents That Act for Your Users](../guides/acting-for-your-users.md#7-evidence-per-user-and-per-tenant).
+
+---
+
+## jarviscore policy
+
+Checks a control policy file, and reviews a journal for what strict mode refuses.
+All three run offline.
+
+```bash
+# Every rule reads as written? (default: CONTROL_POLICY_PATH)
+jarviscore policy check control-policy.yaml
+
+# What strict mode would refuse (report mode) or refused (strict), grouped,
+# with what to do about each (default: JOURNAL_DIR)
+jarviscore policy review
+
+# Who may do what: each operation's scope and limits, and the grants on file
+jarviscore policy scopes control-policy.yaml
+
+# Any of them as JSON
+jarviscore policy check control-policy.yaml --json
+```
+
+`check` names every rule a deployment would silently fail closed on (an unknown
+section, a match key a rule can never meet, a grounding requirement that refers
+to nothing bound, an unreadable `effects` rule), and says whether this host can
+confine the sandbox, which strict mode needs. Exit status: `0` every rule reads
+as written, `1` problems found, `2` no policy file. `review` exits `0`. `scopes`
+lists each scope requirement (what it matches, who must hold which scope, its
+limits), the grants on file and what unattended work holds, and notes a
+requirement matched only by integration name; it exits `1` when the file or any
+requirement cannot be read, and `2` when there is no policy file. See [Turning On Control](../guides/control-policy.md) and
+[your organisation's scopes](../guides/acting-for-your-users.md#4-hold-them-to-your-organisations-scopes).
+
+---
+

@@ -1,3 +1,4 @@
+import json
 import uuid
 from typing import Any, Dict, List, Optional
 
@@ -9,6 +10,8 @@ ATOM_POLICY = {
 }
 
 
+# The idempotency key comes from the payload, so a retry of the same customer is the
+# same request to Square and is never carried out twice.
 async def square_create_customer(payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Square API v2: create customer. Official: https://developer.squareup.com/reference/square/customers-api/create-customer"""
     try:
@@ -16,9 +19,9 @@ async def square_create_customer(payload: Dict[str, Any], timeout: int=30, verif
             return _sq_provision({}, 400, 'payload is required')
         (root, _) = _sq_root(base_url)
         path = '/customers' if 'customer' == 'customer' else '/orders' if 'customer' == 'order' else '/payments'
-        body = payload if 'customer' in payload or 'order' in payload or 'amount_money' in payload else {'customer': payload, 'idempotency_key': str(uuid.uuid4())}
+        body = payload if 'customer' in payload or 'order' in payload or 'amount_money' in payload else {'customer': payload, 'idempotency_key': str(uuid.uuid5(uuid.NAMESPACE_URL, 'jarviscore:square:customer:' + json.dumps(payload, sort_keys=True, default=str)))}
         if 'idempotency_key' not in body:
-            body['idempotency_key'] = str(uuid.uuid4())
+            body['idempotency_key'] = str(uuid.uuid5(uuid.NAMESPACE_URL, 'jarviscore:square:customer:' + json.dumps(payload, sort_keys=True, default=str)))
         (_, data, status, msg) = await _sq_request('post', root + path, json_body=body, timeout=timeout, verify_ssl=verify_ssl)
         if status >= 400:
             return _sq_provision(data if isinstance(data, dict) else {}, status, msg)

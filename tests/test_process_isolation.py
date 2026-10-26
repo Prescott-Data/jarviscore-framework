@@ -116,9 +116,13 @@ async def test_provider_read_access_crosses_the_parent_rpc_only():
 
     assert result["status"] == "success"
     assert result["data"]["status_code"] == 200
-    assert proxy.calls == [
-        ("demo", "GET", "https://example.invalid/items", {})
-    ]
+    assert len(proxy.calls) == 1
+    connection, method, url, kwargs = proxy.calls[0]
+    assert (connection, method, url) == ("demo", "GET", "https://example.invalid/items")
+    # The broker is told the truth about the caller: model-written code, no atom.
+    assert kwargs["authority"]["code_origin"] == "model"
+    assert kwargs["authority"]["atom"] is None
+    assert set(kwargs) == {"authority"}
 
 
 @pytest.mark.asyncio

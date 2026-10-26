@@ -1294,6 +1294,7 @@ class BaseSubAgent(ABC):
         total_tokens: dict,
         total_cost: float,
         exhausted: str,
+        trajectory: Optional[List[Dict[str, Any]]] = None,
     ):
         """One tools-disabled synthesis turn after lease expiry (issue #139).
 
@@ -1327,6 +1328,14 @@ class BaseSubAgent(ABC):
                     "COMPLETE: yes when the answer covers everything the task asked for, "
                     "no when any part was not reached\n"
                     "DONE: <complete human answer; may span lines>\nRESULT: <json result>"
+                )
+            unperformed = self._unperformed(state)
+            if unperformed:
+                # Written from memory, an answer reports what was meant as done. The run's own
+                # record of what did not happen keeps it to what did.
+                instruction += (
+                    "\n\nThese attempts did not succeed; report something as done only where a "
+                    "later result above shows it happened:\n" + "\n".join(unperformed)
                 )
             messages.append({"role": "user", "content": instruction})
             llm_result = await self.llm_client.generate(messages=messages, **kwargs)
@@ -1376,7 +1385,8 @@ class BaseSubAgent(ABC):
                 status="success",
                 summary=f"Completed on landing turn after budget exhaustion ({exhausted}): {parsed['summary']}",
                 payload=state.get_final_output(),
-                trajectory=[{"turn": state.turn, "type": "landing", "summary": parsed["summary"]}],
+                # What the run did stays on the record; the landing is its last entry.
+                trajectory=[*(trajectory or []), {"turn": state.turn, "type": "landing", "summary": parsed["summary"]}],
                 metadata={"tokens": total_tokens, "cost_usd": total_cost,
                           "lease_exhausted": exhausted, "landing_turn": True,
                           "typed_outcome": "SUCCESS_ON_LANDING",
@@ -1446,9 +1456,33 @@ class BaseSubAgent(ABC):
         ``metadata["progress"]``, whichever way it stopped.
         """
         self._current_state = None
-        output = await self._run_turns(
-            task, context, max_turns, model, cognition, context_manager, memory, trace,
-        )
+        from jarviscore.control.effects import scope as effect_scope
+
+        # Effects made during this run belong to its workflow step (control.effects).
+        token = effect_scope.set({
+            "workflow_id": (context or {}).get("workflow_id"),
+            "step_id": (context or {}).get("step_id"),
+            "agent": getattr(self, "agent_id", None),
+        })
+        from jarviscore.evidence.replay import CURRENT, Recorder, install
+
+        output = None
+        recording = None
+        try:
+            # What the run depended on is kept so it can be replayed (evidence.replay).
+            recorder = Recorder.for_run(context)
+            if recorder is not None:
+                install(self)
+                recording = CURRENT.set(recorder)
+                recorder.start(self, task, context, max_turns, model, cognition)
+            output = await self._run_turns(
+                task, context, max_turns, model, cognition, context_manager, memory, trace,
+            )
+        finally:
+            if recording is not None:
+                recorder.end(output)
+                CURRENT.reset(recording)
+            effect_scope.reset(token)
         state = self._current_state
         if output.status != "success" and state is not None:
             progress = state.progress()
@@ -1592,7 +1626,7 @@ class BaseSubAgent(ABC):
                 if memory is None or not self._epochs_remain(state.context):
                     landing = await self._landing_turn(
                         state, system_prompt, conversation_history, model,
-                        total_tokens, total_cost, exhausted,
+                        total_tokens, total_cost, exhausted, trajectory=trajectory,
                     )
                 if landing is not None:
                     return landing
@@ -2151,6 +2185,8 @@ class BaseSubAgent(ABC):
                             "action_id": tool_result.get("action_id"),
                             "action": tool_result.get("action"),
                             "consequence": tool_result.get("consequence"),
+                            # What an approval of this action must cover (approval assertions).
+                            "binding": tool_result.get("binding"),
                         },
                     )
 
@@ -2418,6 +2454,15 @@ class BaseSubAgent(ABC):
                 thought for thought in state.thoughts
                 if not thought.startswith("[DONE_GATE]")
             ]
+            earlier = approval.before_pause(self.redis_store, workflow_id, step_id)
+            if earlier:
+                # A run that resumes a step may not have its memory; the approval record does.
+                state.internal_variables["unperformed_before_pause"] = earlier
+                state.add_thought(
+                    "[BEFORE THE PAUSE] Earlier in this step these attempts did not succeed. "
+                    "They did not happen unless a result after the pause shows they did; "
+                    "say so in your answer:\n" + "\n".join(earlier)
+                )
         for action, approved in decisions:
             if not approved:
                 approval.settle(self.redis_store, workflow_id, step_id, action.action_id, {
@@ -2637,6 +2682,20 @@ class BaseSubAgent(ABC):
                 "kept_memories": list(getattr(self, "_kept_memories", [])),
             },
         )
+
+    @staticmethod
+    def _unperformed(state: KernelState, limit: int = 12) -> List[str]:
+        """The run's attempts that were refused, failed or are waiting, from its tool log."""
+        earlier = (getattr(state, "internal_variables", None) or {}).get("unperformed_before_pause")
+        lines = [str(n) for n in earlier or ()]
+        for item in getattr(state, "tool_history", None) or ():
+            output = item.tool_output if isinstance(item.tool_output, dict) else {}
+            held = str(output.get("status") or "").lower() in ("error", "failed", "failure", "blocked", "refused", "waiting")
+            if item.status == "success" and not held:
+                continue
+            reason = item.error or output.get("error") or output.get("detail") or output.get("status") or item.status
+            lines.append(f"- {item.tool_name}: {' '.join(str(reason).split())[:200]}")
+        return lines[-limit:]
 
     def _records_support_completion(self, state: KernelState, parsed: Dict[str, Any]) -> tuple:
         """Whether a clock expiry may be reported as completion.

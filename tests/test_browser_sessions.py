@@ -55,7 +55,8 @@ class _Context:
         return _Session(self.log)
 
     def on(self, event, handler):
-        self.page_handlers.append(handler)
+        if event == "page":
+            self.page_handlers.append(handler)
 
     async def close(self):
         self.log.append("context.close")
@@ -1243,3 +1244,73 @@ def test_an_ambiguous_suggestion_is_handed_back_and_the_form_is_not_submitted():
     assert choice["status"] == "needs_choice"
     assert choice["suggestions"] == ["London Euston (EUS)", "London Bridge (LBG)"]
     assert not submitted
+
+
+def test_an_approval_shows_what_the_form_submits_and_the_result_what_it_carried():
+    """Live: the agent wrote "2 mugs" while the form held 1; the person must see the form."""
+    context = {"workflow_id": "wf", "step_id": "buy"}
+    agent, clicks = _committing_agent(context)
+    held = {"page": "https://shop.test/order", "element": {
+        "tag": "BUTTON", "text": "Place order", "form": "https://shop.test/order", "method": "post",
+        "fields": [["product", "blue mug"], ["quantity", "1"]]}}
+
+    async def target(tool_name, params):
+        return held
+
+    agent._action_target = target
+    order = {"text": "Place order", "irreversible": True, "consequence": "Orders 2 blue mugs"}
+
+    waiting = asyncio.run(agent._execute_tool("click", dict(order)))
+    assert waiting["action"].endswith("(submits product: blue mug, quantity: 1 to shop.test/order)")
+    request = agent.redis_store.get_hitl_request("wf", "buy", waiting["action_id"])
+    assert "quantity: 1" in request["action"]["description"]
+
+    agent.redis_store.resolve_hitl_request("wf", "buy", "approve", action_id=waiting["action_id"])
+    done = asyncio.run(agent._execute_tool("click", dict(order)))
+    assert done["status"] == "success" and done["submitted"] == {"product": "blue mug", "quantity": "1"}
+    assert done["approved_action"] == waiting["action"]
+
+    # Different values on the page are a different action: the approval does not carry over.
+    held["element"]["fields"] = [["product", "blue mug"], ["quantity", "2"]]
+    again = asyncio.run(agent._execute_tool("click", dict(order)))
+    assert again["status"] == "waiting" and "quantity: 2" in again["action"]
+    assert len(clicks) == 1
+
+
+def test_a_form_filled_and_submitted_shows_the_values_it_sets():
+    from jarviscore.kernel.defaults.browser import _submitted_values
+
+    target = {"page": "p", "submit": {"text": "Send"}, "fields": [
+        {"element": {"name": "quantity"}, "value": "2"}, {"element": {"id": "email"}, "value": "a@b.c"}]}
+    assert _submitted_values("fill_form", target) == [("quantity", "2"), ("email", "a@b.c")]
+    assert _submitted_values("fill_form", {**target, "submit": None}) == []
+    assert _submitted_values("click", {"element": {"text": "Next"}}) == []
+
+
+def test_a_performed_approval_says_what_left_the_browser_and_nothing_else():
+    """Live: the agent described "Place order" as also sending details to a partner, then reported it."""
+    from types import SimpleNamespace
+
+    agent, _ = _committing_agent({"workflow_id": "wf", "step_id": "buy"})
+    broker = SimpleNamespace(sent=[])
+    agent._context = SimpleNamespace(_jc_request_broker=broker)
+
+    async def performed(tool_name, params):
+        broker.sent.append({"method": "POST", "to": "shop.test/order", "outcome": "sent"})
+        broker.sent.append({"method": "POST", "to": "partner.test/collect", "outcome": "refused"})
+        return {"status": "success", "approved_action": "Click “Place order” on shop.test/"}
+
+    agent._execute_browser_tool = performed
+    result = asyncio.run(agent._execute_tool("click", {"ref": "e1"}))
+    assert result["left_the_browser"] == (
+        "Only POST shop.test/order left the browser during this action. "
+        "Anything else it was described as doing did not happen through it.")
+
+    broker.sent.clear()
+
+    async def nothing(tool_name, params):
+        return {"status": "success", "approved_action": "Click “Send”"}
+
+    agent._execute_browser_tool = nothing
+    assert asyncio.run(agent._execute_tool("click", {"ref": "e1"}))["left_the_browser"].startswith(
+        "Nothing left the browser")

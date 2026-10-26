@@ -212,11 +212,31 @@ class NexusClient:
         Raises httpx.HTTPStatusError on failure (e.g. 409 ATTENTION_REQUIRED
         means the user must re-consent via a new handshake).
         """
-        response = await self.client.post(f"/v1/refresh/{connection_id}")
+        response = await self.client.post(f"/v1/refresh/{connection_id}", headers=self._principal_headers())
         response.raise_for_status()
         logger.info(f"Token refreshed for connection {connection_id}")
 
     # ── Data Plane ────────────────────────────────────────────────
+
+    #: Who a request acts for when no person is set (the deployment's own identity).
+    default_subject: Optional[str] = None
+
+    def _principal_headers(self) -> Dict[str, str]:
+        """Whom, by which agent, for which operation: Nexus releases a credential only
+        for the subject that owns the connection, and records all three."""
+        from jarviscore.auth.principal import acting_for, operation
+        from jarviscore.control.effects import scope
+
+        headers: Dict[str, str] = {}
+        person = acting_for.get() or self.default_subject
+        if person:
+            headers["X-Nexus-Subject"] = self._ensure_uuid(str(person))
+        agent = (scope.get() or {}).get("agent")
+        if agent:
+            headers["X-Nexus-Agent"] = str(agent)
+        if operation.get():
+            headers["X-Nexus-Operation"] = str(operation.get())[:128]
+        return headers
 
     async def get_token(self, connection_id: str) -> Dict[str, Any]:
         """
@@ -231,7 +251,7 @@ class NexusClient:
 
         Agents store only the connection_id. Tokens are fetched on demand.
         """
-        response = await self.client.get(f"/v1/token/{connection_id}")
+        response = await self.client.get(f"/v1/token/{connection_id}", headers=self._principal_headers())
         response.raise_for_status()
         return response.json()
 
@@ -252,6 +272,7 @@ class NexusClient:
                 "workspace_id": self._ensure_uuid(user_id),
                 "provider_name": broker_name(provider),
             },
+            headers=self._principal_headers(),
         )
         if response.status_code == 404:
             return None

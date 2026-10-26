@@ -1,0 +1,18 @@
+id: approvals-cover-the-exact-action
+claim: >-
+  An approval covers exactly the action the person saw: every argument (for a
+  browser action, the element and the values entered). The same operation with
+  other arguments asks the person again, and an operation that already ran is
+  never run again under any arguments.
+scope:
+  - Consequential actions gated through jarviscore.kernel.approval (coder integrations and browser commits).
+assumptions:
+  - Workflow state is durable (a Redis-backed Mesh); without it the action is refused.
+not_claimed:
+  - That the person understood the consequence they approved.
+evidence:
+  - tests/test_bound_approvals.py::test_an_approval_does_not_cover_different_arguments_for_the_same_invoice
+  - tests/test_bound_approvals.py::test_new_arguments_after_an_approval_ask_the_person_again_with_those_arguments
+  - tests/test_bound_approvals.py::test_an_operation_that_ran_is_not_run_again_with_other_arguments
+  - tests/test_bound_approvals.py::test_the_binding_ignores_rewording_but_not_arguments
+published: []

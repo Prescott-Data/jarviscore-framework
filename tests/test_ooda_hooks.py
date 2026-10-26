@@ -598,6 +598,31 @@ class TestNativeToolTurns:
         resumable = {"execution_budget": {"max_epochs_per_step": 3}, "execution_epoch": 1}
         assert land(resumable) is None
 
+    def test_a_landing_is_told_what_did_not_happen_and_keeps_the_runs_record(self):
+        llm = _NativeLLM([_call("done", {
+            "summary": "Ordered 2 mugs; the partner notification was refused.", "result": {}, "complete": True,
+        })])
+        agent = _NativeAgent(llm)
+        agent._native_protocol = True
+        state = _make_state()
+        state.add_tool_result("run_playwright", {"code": "fetch(partner)"},
+                              {"status": "error", "error": "evaluate refused: sends the page to another site"},
+                              error="evaluate refused: sends the page to another site")
+        state.add_tool_result("click", {"ref": "e12"}, {"status": "success"})
+        history = [{"assistant": "", "observation": "ordered",
+                    "tool_call": {"id": "c1", "name": "click", "arguments": "{}"}}]
+        earlier = [{"turn": 1, "type": "tool_call", "tool": "run_playwright"}, {"turn": 2, "type": "tool_call", "tool": "click"}]
+
+        landing = asyncio.run(agent._landing_turn(
+            state, "system", history, None, {"input": 0, "output": 0, "total": 0}, 0.0, "turns",
+            trajectory=earlier,
+        ))
+
+        told = llm.requests[0]["messages"][-1]["content"]
+        assert "did not succeed" in told and "run_playwright: evaluate refused" in told
+        assert "click" not in told.split("did not succeed", 1)[1]
+        assert landing.trajectory[:2] == earlier and landing.trajectory[-1]["type"] == "landing"
+
     def test_a_provider_without_native_tools_keeps_the_text_protocol(self):
         for native in (False, object()):
             llm = _NativeLLM([{"content": _done_reply()}], native=native)

@@ -122,3 +122,38 @@ def test_the_binding_ignores_rewording_but_not_arguments():
 
     assert base.binding_digest() == reworded.binding_digest()
     assert base.binding_digest() != changed.binding_digest()
+
+
+def test_a_resumed_step_is_told_what_did_not_happen_before_the_pause():
+    import asyncio
+
+    from jarviscore.contracts.hitl import HITLAction
+    from jarviscore.kernel import approval
+    from jarviscore.kernel.state import KernelState
+    from jarviscore.kernel.subagent import BaseSubAgent
+    from jarviscore.testing.mocks import MockRedisContextStore
+
+    store = MockRedisContextStore()
+    action = HITLAction(action_id="a1", tool="click", system="browser", params={"ref": "e12"},
+                        consequence="Places the order.")
+    waiting = approval.gate(store, "wf", "s1", action,
+                            before=["- run_playwright: evaluate refused: sends the page to another site"])
+    assert waiting["typed_outcome"] == "WAITING_FOR_APPROVAL"
+    store.resolve_hitl_action_once("wf", "s1", "a1", "approve", responder="ada")
+
+    class Agent(BaseSubAgent):
+        def get_system_prompt(self):
+            return ""
+
+        def setup_tools(self):
+            pass
+
+    agent = Agent.__new__(Agent)
+    agent.redis_store = store
+    agent._approved_action_applies = lambda action: asyncio.sleep(0, result=False)
+    state = KernelState(workflow_id="wf", step_id="s1", agent_id="b", task="order",
+                        context={"workflow_id": "wf", "step_id": "s1"})
+    asyncio.run(agent._carry_out_decided_actions(state, None))
+
+    assert any(t.startswith("[BEFORE THE PAUSE]") and "evaluate refused" in t for t in state.thoughts)
+    assert BaseSubAgent._unperformed(state)[0].startswith("- run_playwright: evaluate refused")

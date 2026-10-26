@@ -566,12 +566,28 @@ class SandboxBinding:
             current[path] = (candidate, payload, digest)
 
         delta_prefix = prefix.strip("/")
+        changed = {
+            path: item for path, item in current.items()
+            if baseline.get(path) is None or baseline[path].sha256 != item[2]
+        }
+        removed = sorted(path for path in set(baseline) - set(current) if not is_ignored(path))
+        from jarviscore.control.effects import Effect, content_digest, mediated
+
+        # The step's changes leave its sandbox here, for the next step or for review.
+        with mediated(Effect(
+            "workspace", "export", target=self.snapshot.snapshot_id, origin="model",
+            attributes={
+                "changed": len(changed), "deleted": len(removed),
+                **content_digest(sorted([[p, item[2]] for p, item in changed.items()] + [[p, None] for p in removed])),
+            },
+        )):
+            return await self._export(changed, removed, baseline, delta_prefix)
+
+    async def _export(self, changed, removed, baseline, delta_prefix: str) -> WorkspaceDelta:
         added = []
         modified = []
-        for path, (candidate, payload, digest) in current.items():
+        for path, (candidate, payload, digest) in changed.items():
             previous = baseline.get(path)
-            if previous is not None and previous.sha256 == digest:
-                continue
             blob_path = f"{delta_prefix}/objects/{digest}"
             existing = await self.store.blob_storage.read(blob_path)
             if existing is None or _bytes(existing) != payload:
@@ -585,9 +601,7 @@ class SandboxBinding:
             )
             (modified if previous is not None else added).append(entry)
 
-        deleted = tuple(sorted(
-            path for path in set(baseline) - set(current) if not is_ignored(path)
-        ))
+        deleted = tuple(removed)
         has_changes = bool(added or modified or deleted)
         provisional = WorkspaceDelta(
             snapshot_id=self.snapshot.snapshot_id,

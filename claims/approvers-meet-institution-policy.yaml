@@ -1,0 +1,26 @@
+id: approvers-meet-institution-policy
+claim: >-
+  The institution decides which actions need a person and who may approve them:
+  the roles an approver must hold, that the approver is not the person who asked,
+  and how strongly their identity must be established. An approval that does not
+  meet that policy is refused and recorded, and is checked again under the policy
+  in force when the action is about to run.
+scope:
+  - Deployment approval rules (approvals in CONTROL_POLICY_PATH) over integrations' own approval settings.
+  - Decisions recorded through Mesh.resolve_hitl / kernel.approval.record_decision.
+assumptions:
+  - A verified approver is established by an approval assertion signed with a key only the deployment and its approving backend hold, after that backend's own sign-in.
+  - Approvers marked asserted are as trustworthy as the application code that built them.
+not_claimed:
+  - That the backend's sign-in itself is sound; that is the identity provider's job.
+  - A waiver can remove approval from any action except a destructive one.
+evidence:
+  - tests/test_approval_authority.py::test_a_deployment_requires_approval_where_the_integration_does_not
+  - tests/test_approval_authority.py::test_a_deployment_may_waive_approval_except_for_a_destructive_action
+  - tests/test_approval_authority.py::test_an_approver_needs_the_role_the_assurance_and_not_to_be_the_requester
+  - tests/test_approval_authority.py::test_an_unauthenticated_or_self_approval_is_refused_and_recorded
+  - tests/test_approval_authority.py::test_a_verified_finance_approver_lets_it_run_once
+  - tests/test_approval_authority.py::test_a_tightened_policy_reopens_an_approval_that_no_longer_qualifies
+  - tests/test_approval_authority.py::test_a_tampered_assertion_proves_nothing
+  - tests/test_approval_authority.py::test_an_assertion_proves_nothing_when
+published: []

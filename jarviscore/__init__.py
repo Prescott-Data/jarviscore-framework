@@ -56,81 +56,116 @@ except PackageNotFoundError:  # running from a source tree without install
 __author__ = "JarvisCore Contributors"
 __license__ = "Apache-2.0"
 
-# Core classes
-from jarviscore.core.agent import Agent
-from jarviscore.core.profile import Profile
-from jarviscore.core.mesh import Mesh, MeshMode
-from jarviscore.core.pool import Pool
+import importlib as _importlib
+from typing import TYPE_CHECKING as _TYPE_CHECKING
 
-# Execution profiles
-from jarviscore.profiles.autoagent import AutoAgent
-from jarviscore.profiles.customagent import CustomAgent
-from jarviscore.human import HumanAgent
-from jarviscore.execution.workspace import (
-    BlobSnapshotStore,
-    SandboxBinding,
-    SnapshotEntry,
-    SourceRef,
-    SourceSnapshot,
-    WorkspaceAccess,
-    WorkspaceDelta,
-    WorkspaceDeltaConflict,
-)
-from jarviscore.room import Proposal, Room, RoomConflict
-from jarviscore.execution.sources import (
-    SourceAdapter,
-    SourceAdapterError,
-    SourceContractError,
-    SourceIntegrityError,
-)
+# Public names load on first use (PEP 562): ``import jarviscore`` used to import
+# the mesh, every LLM SDK and the planner, about 3 s, before a line of user code;
+# and every sandboxed code run paid it again in its child process.
+_EXPORTS = {
+    "jarviscore.core.agent": ("Agent",),
+    "jarviscore.core.profile": ("Profile",),
+    "jarviscore.core.mesh": ("Mesh", "MeshMode"),
+    "jarviscore.core.pool": ("Pool",),
+    "jarviscore.profiles.autoagent": ("AutoAgent",),
+    "jarviscore.profiles.customagent": ("CustomAgent",),
+    "jarviscore.human": ("HumanAgent",),
+    "jarviscore.execution.workspace": (
+        "BlobSnapshotStore", "SandboxBinding", "SnapshotEntry", "SourceRef",
+        "SourceSnapshot", "WorkspaceAccess", "WorkspaceDelta", "WorkspaceDeltaConflict",
+    ),
+    "jarviscore.room": ("Proposal", "Room", "RoomConflict"),
+    "jarviscore.auth.people": ("Person",),
+    "jarviscore.auth.principal": ("OnBehalfOf", "act_for"),
+    "jarviscore.execution.sources": (
+        "SourceAdapter", "SourceAdapterError", "SourceContractError", "SourceIntegrityError",
+    ),
+    "jarviscore.adapter": ("jarvis_agent", "wrap"),
+    "jarviscore.context": ("JarvisContext", "MemoryAccessor", "DependencyAccessor"),
+    "jarviscore.execution.decisions": (
+        "DecisionClientError", "DecisionClient", "DecisionResult", "JevDecisionClient",
+    ),
+    "jarviscore.kernel.state": (
+        "ArtifactReference", "ArtifactReferenceError", "CommandObservation",
+        "WorkspaceMutation", "hydrate_artifact_references", "hydrate_receipt_evidence",
+    ),
+    # Long-horizon planning
+    "jarviscore.planning": (
+        "GoalExecution", "PlannedStep", "StepEvaluation", "CompletedStep", "Planner",
+        "PlannerError", "StepEvaluator", "EvaluatorError",
+    ),
+    # P2P direct communication (optional: `pip install jarviscore-framework[p2p]`);
+    # injected into agents at start() time when available.
+    "jarviscore.p2p": ("PeerClient", "PeerTool", "PeerInfo", "IncomingMessage"),
+}
+_SOURCE = {name: module for module, names in _EXPORTS.items() for name in names}
+#: Modules whose names are None when they cannot be imported, as before.
+_OPTIONAL = frozenset({"jarviscore.planning", "jarviscore.p2p"})
+#: Agents with run() loops (previously called JarvisAgent).
+_ALIASES = {"JarvisAgent": "Agent"}
 
-# Custom Profile: Decorator, Wrapper, and Context
-from jarviscore.adapter import jarvis_agent, wrap
-from jarviscore.context import JarvisContext, MemoryAccessor, DependencyAccessor
-from jarviscore.execution.decisions import (
-    DecisionClientError,
-    DecisionClient,
-    DecisionResult,
-    JevDecisionClient,
-)
-from jarviscore.kernel.state import (
-    ArtifactReference,
-    ArtifactReferenceError,
-    CommandObservation,
-    WorkspaceMutation,
-    hydrate_artifact_references,
-    hydrate_receipt_evidence,
-)
 
-# Long-horizon planning (lazy import — requires no extra dependencies)
-try:
-    from jarviscore.planning import (
-        GoalExecution,
-        PlannedStep,
-        StepEvaluation,
-        CompletedStep,
-        Planner,
-        PlannerError,
-        StepEvaluator,
-        EvaluatorError,
+def __getattr__(name):
+    if name in _ALIASES:
+        value = __getattr__(_ALIASES[name])
+    elif name in _SOURCE:
+        module = _SOURCE[name]
+        try:
+            value = getattr(_importlib.import_module(module), name)
+        except Exception:  # noqa: BLE001
+            if module not in _OPTIONAL:
+                raise
+            value = None
+    else:
+        # ``import jarviscore`` used to import its subpackages too; reaching one as an
+        # attribute (``jarviscore.core.mesh``) still works.
+        try:
+            value = _importlib.import_module(f"{__name__}.{name}")
+        except ModuleNotFoundError as exc:
+            if exc.name != f"{__name__}.{name}":
+                raise
+            raise AttributeError(f"module 'jarviscore' has no attribute {name!r}") from None
+    globals()[name] = value
+    return value
+
+
+def __dir__():
+    return sorted(set(globals()) | set(__all__))
+
+
+if _TYPE_CHECKING:  # pragma: no cover - for type checkers and IDEs
+    from jarviscore.adapter import jarvis_agent, wrap
+    from jarviscore.auth.people import Person
+    from jarviscore.auth.principal import OnBehalfOf, act_for
+    from jarviscore.context import DependencyAccessor, JarvisContext, MemoryAccessor
+    from jarviscore.core.agent import Agent
+    from jarviscore.core.agent import Agent as JarvisAgent
+    from jarviscore.core.mesh import Mesh, MeshMode
+    from jarviscore.core.pool import Pool
+    from jarviscore.core.profile import Profile
+    from jarviscore.execution.decisions import (
+        DecisionClient, DecisionClientError, DecisionResult, JevDecisionClient,
     )
-except Exception:  # noqa: BLE001
-    GoalExecution = None   # type: ignore
-    Planner = None         # type: ignore
-    StepEvaluator = None   # type: ignore
-
-# P2P Direct Communication (optional — requires `pip install jarviscore-framework[p2p]`)
-# These are injected into agents at start() time when available.
-try:
-    from jarviscore.p2p import PeerClient, PeerTool, PeerInfo, IncomingMessage
-except Exception:  # noqa: BLE001  (swim-p2p + pyzmq may not be installed)
-    PeerClient = None      # type: ignore
-    PeerTool = None        # type: ignore
-    PeerInfo = None        # type: ignore
-    IncomingMessage = None # type: ignore
-
-# Alias for agents with run() loops (previously called JarvisAgent)
-JarvisAgent = Agent
+    from jarviscore.execution.sources import (
+        SourceAdapter, SourceAdapterError, SourceContractError, SourceIntegrityError,
+    )
+    from jarviscore.execution.workspace import (
+        BlobSnapshotStore, SandboxBinding, SnapshotEntry, SourceRef, SourceSnapshot,
+        WorkspaceAccess, WorkspaceDelta, WorkspaceDeltaConflict,
+    )
+    from jarviscore.human import HumanAgent
+    from jarviscore.kernel.state import (
+        ArtifactReference, ArtifactReferenceError, CommandObservation, WorkspaceMutation,
+        hydrate_artifact_references, hydrate_receipt_evidence,
+    )
+    from jarviscore.p2p import IncomingMessage, PeerClient, PeerInfo, PeerTool
+    from jarviscore.planning import (
+        CompletedStep, EvaluatorError, GoalExecution, PlannedStep, Planner, PlannerError,
+        StepEvaluation, StepEvaluator,
+    )
+    from jarviscore.profiles.autoagent import AutoAgent
+    from jarviscore.profiles.customagent import CustomAgent
+    from jarviscore.room import Proposal, Room, RoomConflict
 
 __all__ = [
     # Version
@@ -163,6 +198,12 @@ __all__ = [
     "Room",
     "Proposal",
     "RoomConflict",
+
+    # Acting for your users: their credentials, within what they delegated
+    "OnBehalfOf",
+    "Person",
+    "act_for",
+
     "SourceAdapter",
     "SourceAdapterError",
     "SourceContractError",

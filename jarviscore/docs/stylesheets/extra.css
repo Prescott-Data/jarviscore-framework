@@ -85,8 +85,6 @@ body,
   font-weight: 600;
   letter-spacing: -0.015em;
   color: var(--jc-brand);
-  border-left: 3px solid var(--jc-brand);
-  padding-left: 0.7rem;
   margin-top: 2rem;
 }
 
@@ -103,7 +101,6 @@ body,
 /* Dark mode heading colours */
 [data-md-color-scheme="slate"] .md-typeset h2 {
   color: var(--jc-brand-light);
-  border-left-color: var(--jc-brand-light);
 }
 
 [data-md-color-scheme="slate"] .md-typeset h3 {
@@ -1338,6 +1335,63 @@ body,
   margin: 0;
 }
 
+/* Code blocks read as their own panel, set apart from the prose around them:
+   a smaller monospace size, a distinct surface, and room above and below. */
+.md-typeset .highlight:not(.jc-hero .highlight) {
+  margin: 1.6em 0;
+  border: 1px solid #d8dee8;
+  border-radius: 8px;
+  box-shadow: none;
+  background: #f6f8fb;
+}
+
+.md-typeset .highlight:not(.jc-hero .highlight) pre > code {
+  font-size: 0.6rem;
+  line-height: 1.6;
+  padding: 0.95em 1.2em;
+  background: transparent;
+}
+
+.md-typeset .highlight .filename {
+  background: #eaf0fb;
+  border-bottom: 1px solid #d8dee8;
+  font-size: 0.68rem;
+  padding: 0.5em 1.2em;
+}
+
+/* Prose right before or after a block keeps its distance. */
+.md-typeset p + .highlight,
+.md-typeset ul + .highlight,
+.md-typeset ol + .highlight {
+  margin-top: 1.1em;
+}
+
+.md-typeset .highlight + p,
+.md-typeset .highlight + ul,
+.md-typeset .highlight + ol,
+.md-typeset .highlight + h2,
+.md-typeset .highlight + h3 {
+  margin-top: 1.4em;
+}
+
+/* Inside tabs, admonitions and lists the container already spaces it. */
+.md-typeset .tabbed-block > .highlight,
+.md-typeset .admonition .highlight,
+.md-typeset details .highlight,
+.md-typeset li > .highlight {
+  margin: 0.9em 0;
+}
+
+[data-md-color-scheme="slate"] .md-typeset .highlight:not(.jc-hero .highlight) {
+  background: #0d1117;
+  border-color: #262c3a;
+}
+
+[data-md-color-scheme="slate"] .md-typeset .highlight .filename {
+  background: #151b26;
+  border-bottom-color: #262c3a;
+}
+
 .md-typeset .md-code__button {
   width: 2.25rem;
   height: 2.25rem;
@@ -1388,7 +1442,8 @@ body,
   border-radius: var(--jc-radius);
   overflow: hidden;
   border: 1px solid var(--jc-border);
-  font-size: 0.76rem;
+  font-size: 0.66rem;
+  line-height: 1.5;
   box-shadow: 0 1px 6px rgba(0, 0, 0, 0.05);
   width: 100%;
   min-width: 100%;
@@ -1398,22 +1453,23 @@ body,
 .md-typeset table:not([class]) th {
   background: var(--jc-gradient-subtle);
   font-weight: 600 !important;
-  font-size: 0.68rem !important;
-  letter-spacing: 0.04em !important;
+  font-size: 0.56rem !important;
+  letter-spacing: 0.05em !important;
   text-transform: uppercase !important;
-  padding: 0.55rem 1rem !important;
+  padding: 0.55rem 0.9rem !important;
   border-bottom: 1.5px solid var(--jc-border);
   white-space: nowrap;
 }
 
 .md-typeset table:not([class]) td {
-  padding: 0.7rem 1rem;
+  padding: 0.55rem 0.9rem;
   border-bottom: 1px solid var(--jc-border);
   vertical-align: middle;
   max-width: 30rem;
 }
 
 .md-typeset table:not([class]) td code {
+  font-size: 0.6rem;
   overflow-wrap: anywhere;
   word-break: break-word;
 }
@@ -1857,12 +1913,10 @@ body,
   border-radius: var(--jc-radius);
   background: var(--jc-gradient-subtle);
   border: 1px solid var(--jc-border);
-  border-left: 3px solid var(--jc-brand);
   transition: border-color var(--jc-transition), box-shadow var(--jc-transition);
 }
 
 .changelog-release:hover {
-  border-left-color: var(--jc-accent);
   box-shadow: var(--jc-shadow);
 }
 
@@ -1981,9 +2035,9 @@ body,
 }
 
 /* Code blocks inside cards — compact */
-.changelog-release .highlight {
-  margin-top: 0.4em;
-  margin-bottom: 0.6em;
+.md-typeset .changelog-release .highlight {
+  margin-top: 0.6em;
+  margin-bottom: 0.9em;
 }
 
 /* ── Hide the right-hand TOC on the changelog page ── */
@@ -2549,3 +2603,78 @@ body,
 .md-content__inner:has(> .jc-hero) .md-typeset__table { display: block; }
 .md-content__inner:has(> .jc-hero) .md-typeset__table table:not([class]) { display: table; width: 100%; }
 .md-content__inner:has(> .jc-hero) .md-typeset__table td:first-child { white-space: nowrap; font-weight: 600; }
+
+
+/* ============================================================
+   TERMINAL BLOCKS: commands and their output, apart from code
+   ============================================================ */
+
+/* A soft blue-grey panel with a window bar: clearly a terminal, never heavy. */
+.md-typeset .highlight:is(.language-bash, .language-sh, .language-shell, .language-console, .language-zsh, .language-text):not(.jc-hero .highlight) {
+  background: #eef3fa;
+  border-color: #cdd8ea;
+  --md-code-bg-color: transparent;
+  --md-code-fg-color: #1d2a44;
+  --md-code-hl-comment-color: #6b7a93;
+}
+
+/* The bar is decoration only: it is not part of what is copied. */
+.md-typeset .highlight:is(.language-bash, .language-sh, .language-shell, .language-console, .language-zsh, .language-text):not(.jc-hero .highlight)::before {
+  content: "Terminal";
+  display: block;
+  padding: 0.38rem 0.9rem 0.38rem 3.1rem;
+  font: 600 0.52rem/1 'Inter', sans-serif;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #6b7a93;
+  border-bottom: 1px solid #cdd8ea;
+  background:
+    radial-gradient(circle at 0.95rem 50%, #ff5f57 0.2rem, transparent 0.22rem),
+    radial-gradient(circle at 1.55rem 50%, #febc2e 0.2rem, transparent 0.22rem),
+    radial-gradient(circle at 2.15rem 50%, #28c840 0.2rem, transparent 0.22rem),
+    #e2eaf6;
+}
+
+.md-typeset .highlight:is(.language-bash, .language-sh, .language-shell, .language-console, .language-zsh, .language-text) .md-clipboard {
+  background: transparent;
+}
+
+[data-md-color-scheme="slate"] .md-typeset .highlight:is(.language-bash, .language-sh, .language-shell, .language-console, .language-zsh, .language-text):not(.jc-hero .highlight) {
+  background: #182030;
+  border-color: #2c3648;
+  --md-code-fg-color: #dbe4f3;
+  --md-code-hl-comment-color: #8b97ad;
+}
+
+[data-md-color-scheme="slate"] .md-typeset .highlight:is(.language-bash, .language-sh, .language-shell, .language-console, .language-zsh, .language-text):not(.jc-hero .highlight)::before {
+  color: #8b97ad;
+  border-bottom-color: #2c3648;
+  background:
+    radial-gradient(circle at 0.95rem 50%, #ff5f57 0.2rem, transparent 0.22rem),
+    radial-gradient(circle at 1.55rem 50%, #febc2e 0.2rem, transparent 0.22rem),
+    radial-gradient(circle at 2.15rem 50%, #28c840 0.2rem, transparent 0.22rem),
+    #1f2839;
+}
+
+/* ============================================================
+   PERMALINKS: a link icon, not a pilcrow
+   ============================================================ */
+
+.md-typeset .headerlink {
+  font-size: 0;
+  width: 0.85rem;
+  height: 0.85rem;
+  display: inline-block;
+  vertical-align: middle;
+  margin-left: 0.45rem;
+}
+
+.md-typeset .headerlink::before {
+  content: "";
+  display: block;
+  width: 100%;
+  height: 100%;
+  background-color: currentColor;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71'/%3E%3Cpath d='M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71'/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71'/%3E%3Cpath d='M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71'/%3E%3C/svg%3E") center / contain no-repeat;
+}

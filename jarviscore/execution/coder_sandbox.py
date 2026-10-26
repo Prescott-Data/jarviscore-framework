@@ -24,10 +24,8 @@ Output contract (result variable in generated code):
         "error": str | None,
     }
 """
-import ast
 import asyncio
 import hashlib
-import io
 import json
 import logging
 import os
@@ -39,7 +37,6 @@ import socket
 import subprocess
 import sys
 import time
-from contextlib import redirect_stdout
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -320,6 +317,25 @@ class BashExecutor:
         if not work_dir.exists():
             work_dir.mkdir(parents=True, exist_ok=True)
 
+        if os.environ.get("JARVISCORE_SANDBOX_CHILD") == "1":
+            return self._spawn(command, work_dir)
+        from jarviscore.control.effects import Effect, EffectDenied, content_digest, mediated
+
+        effect = Effect(
+            "process", "run",
+            target=" ".join(os.path.basename(shell_tokens[index]) for index in command_indexes),
+            origin="model",
+            attributes={"confined": False, **content_digest(command)},
+        )
+        try:
+            with mediated(effect) as mediation:
+                result = self._spawn(command, work_dir)
+                mediation.done(ok=bool(result.get("success")), returncode=result.get("returncode"))
+                return result
+        except EffectDenied as exc:
+            raise BashPermissionError(str(exc)) from exc
+
+    def _spawn(self, command: str, work_dir: Path) -> Dict[str, Any]:
         try:
             command_dirs = {
                 str(Path(found).parent)
@@ -821,10 +837,34 @@ class CoderSandbox:
         if self.browser_proxy is not None and getattr(self, "_browser_process", None) is not None:
             # The session keeps its own variables and state; the step's reads arrive with each cell.
             reads = {"browser_reads": (context or {}).get("browser_reads") or {}}
-            return await self._execute_browser_cell(
+            return await self._mediated_code_run(code, context, lambda: self._execute_browser_cell(
                 {"code": code, "context": reads}, timeout or self.timeout,
-            )
+            ))
         return await self._execute_subprocess(code, context, timeout or self.timeout)
+
+    async def _mediated_code_run(self, code: str, context: Optional[Dict], run) -> Dict[str, Any]:
+        """Run code as a decided, recorded effect (control.effects); a refusal is the result."""
+        from jarviscore.control.effects import Effect, EffectDenied, content_digest, run_mediated
+
+        authority = (context or {}).get("_atom_authority") or {}
+        effect = Effect(
+            "code", "run",
+            target=str(authority.get("atom") or "program"),
+            origin=str(authority.get("code_origin") or "model"),
+            attributes={"confined": self.confined, **content_digest(code)},
+        )
+        try:
+            return await run_mediated(
+                effect, run,
+                workflow_id=(context or {}).get("workflow_id"), step_id=(context or {}).get("step_id"),
+                ok=lambda result: result.get("status") == "success",
+            )
+        except EffectDenied as exc:
+            refused = self._to_sandbox_dict(CoderResult(
+                success=False, error=f"Not run: {exc}", error_type="PolicyDenied",
+            ))
+            # Nothing ran: an approval for it stays usable, and nobody is told it was done.
+            return {**refused, "performed": False, "semantic_error": "POLICY_REFUSED"}
 
     @property
     def confined(self) -> bool:
@@ -856,6 +896,13 @@ class CoderSandbox:
         return await self._execute_subprocess(code, context, timeout or self.timeout)
 
     async def _execute_subprocess(
+        self, code: str, context: Optional[Dict], timeout: int
+    ) -> Dict[str, Any]:
+        return await self._mediated_code_run(
+            code, context, lambda: self._run_child(code, context, timeout),
+        )
+
+    async def _run_child(
         self, code: str, context: Optional[Dict], timeout: int
     ) -> Dict[str, Any]:
         start = time.time()
@@ -891,6 +938,8 @@ class CoderSandbox:
             "TMPDIR": str(self.workspace / ".tmp"),
             "LANG": "C.UTF-8",
             "PYTHONPATH": str(Path(__file__).resolve().parents[2]),
+            # Commands inside the child are its own scratch work, inside its confinement.
+            "JARVISCORE_SANDBOX_CHILD": "1",
             **_user_site_environment(),
         }
         Path(safe_env["TMPDIR"]).mkdir(parents=True, exist_ok=True)
@@ -953,7 +1002,7 @@ class CoderSandbox:
             )
         else:
             cr = self._parse_result(response.get("result"), response.get("stdout", ""), time.time() - start)
-            await self._collect_artifacts(cr, before)
+            await self._collect_artifacts(cr, before, context)
         return self._to_sandbox_dict(cr)
 
     @staticmethod
@@ -1094,9 +1143,27 @@ class CoderSandbox:
                             )
                         if not connection_id:
                             raise RuntimeError("No provider account is connected for this task.")
+                        # Code in the sandbox is the model's unless it runs as an atom.
+                        grant = mutation if isinstance(mutation, dict) else (
+                            authority if isinstance(authority, dict) else {}
+                        )
+                        call_authority = {
+                            "workflow_id": context.get("workflow_id"),
+                            "step_id": context.get("step_id"),
+                            "atom": grant.get("atom"),
+                            "effect": grant.get("effect"),
+                            "code_origin": grant.get("code_origin") or "model",
+                            "contract": grant.get("contract"),
+                            "action_id": grant.get("action_id"),
+                            "approval_required": grant.get("approval_required"),
+                            "approval": grant.get("approval"),
+                            "approver": grant.get("approver"),
+                            # Parent-side list a preview's decisions are noted in.
+                            "preview": grant.get("preview"),
+                        }
                         call = self._recording_nexus_call(
                             lambda method, url, **kwargs: self._nexus_call_proxy.call(
-                                connection_id, method, url, **kwargs
+                                connection_id, method, url, authority=call_authority, **kwargs
                             ),
                             provider or str(connection_id),
                         )
@@ -1129,12 +1196,24 @@ class CoderSandbox:
                         if self._mesh_proxy is None:
                             raise RuntimeError("No mesh is attached to this agent.")
                         payload = request["payload"]
-                        result = await self._mesh_proxy.delegate(
-                            to=str(payload.get("to") or ""),
-                            task=str(payload.get("task") or ""),
-                            context=payload.get("context"),
-                            capability=payload.get("capability"),
-                            timeout=payload.get("timeout"),
+                        from jarviscore.control.effects import Effect, content_digest, run_mediated
+
+                        authority = context.get("_atom_authority") or {}
+                        result = await run_mediated(
+                            Effect(
+                                "peer", "delegate",
+                                target=str(payload.get("to") or payload.get("capability") or ""),
+                                origin=str(authority.get("code_origin") or "model"),
+                                attributes=content_digest({"task": payload.get("task"), "context": payload.get("context")}),
+                            ),
+                            lambda: self._mesh_proxy.delegate(
+                                to=str(payload.get("to") or ""),
+                                task=str(payload.get("task") or ""),
+                                context=payload.get("context"),
+                                capability=payload.get("capability"),
+                                timeout=payload.get("timeout"),
+                            ),
+                            workflow_id=context.get("workflow_id"), step_id=context.get("step_id"),
                         )
                     else:
                         raise RuntimeError("Unknown sandbox RPC operation.")
@@ -1159,171 +1238,6 @@ class CoderSandbox:
         if value is None or isinstance(value, (str, int, float, bool)):
             return value
         return str(value)
-
-    async def _execute_local(
-        self,
-        code: str,
-        context: Optional[Dict] = None,
-        timeout: Optional[int] = None,
-    ) -> Dict[str, Any]:
-        """
-        Execute Python code with full file system + subprocess access.
-
-        Returns a dict compatible with SandboxExecutor's contract so the
-        Kernel's CoderSubAgent can call .get("status") and .get("output")
-        without crashing.  All CoderResult-specific fields (files_created,
-        git_branch, etc.) are embedded inside ``output`` AND promoted to
-        the top level for callers that read them directly.
-
-        Shape:
-            {
-                "status":        "success" | "failure",
-                "output":        CoderResult.to_dict(),   # the full structured result
-                "error":         str | None,
-                "error_type":    str | None,
-                "execution_time": float,
-                "mode":          "coder_sandbox",
-                # promoted fields (convenience):
-                "files_created":  [...],
-                "files_modified": [...],
-                "git_branch":     str | None,
-                "data":           Any,
-            }
-        """
-        """
-        Execute Python code with full file system + subprocess access.
-
-        Args:
-            code: Python code to execute. Must set `result` variable.
-            context: Extra variables to inject into namespace.
-            timeout: Per-call timeout override.
-
-        Returns:
-            CoderResult with files_created, git_branch, stdout, etc.
-        """
-        timeout = timeout or self.timeout
-        start = time.time()
-
-        self._access_failure = None
-        namespace = self._build_namespace(context)
-        stdout_capture = io.StringIO()
-        before = self._snapshot_output()
-
-        try:
-            # Syntax check before execution
-            try:
-                ast.parse(code)
-            except SyntaxError as e:
-                cr = CoderResult(
-                    success=False,
-                    error=f"SyntaxError at line {e.lineno}: {e.msg}",
-                    error_type="SyntaxError",
-                    execution_time=time.time() - start,
-                )
-                return self._to_sandbox_dict(cr)
-
-            is_async = "async def" in code or "await " in code or "asyncio" in code
-
-            if is_async:
-                exec_result = await asyncio.wait_for(
-                    self._run_async(code, namespace, stdout_capture),
-                    timeout=timeout,
-                )
-            else:
-                loop = asyncio.get_event_loop()
-                exec_result = await asyncio.wait_for(
-                    loop.run_in_executor(
-                        None,
-                        self._run_sync,
-                        code, namespace, stdout_capture,
-                    ),
-                    timeout=timeout,
-                )
-
-            if exec_result.get("error"):
-                cr = CoderResult(
-                    success=False,
-                    stdout=stdout_capture.getvalue(),
-                    error=exec_result["error"],
-                    error_type=exec_result.get("error_type", "RuntimeError"),
-                    execution_time=time.time() - start,
-                )
-                return self._to_sandbox_dict(cr)
-
-            raw = namespace.get("result")
-            cr = self._parse_result(raw, stdout_capture.getvalue(), time.time() - start)
-            await self._collect_artifacts(cr, before)
-            return self._to_sandbox_dict(cr)
-
-        except asyncio.TimeoutError:
-            cr = CoderResult(
-                success=False,
-                stdout=stdout_capture.getvalue(),
-                error=f"Coder execution timed out after {timeout}s",
-                error_type="ExecutionTimeout",
-                execution_time=time.time() - start,
-            )
-            return self._to_sandbox_dict(cr)
-        except BashPermissionError as e:
-            cr = CoderResult(
-                success=False,
-                stdout=stdout_capture.getvalue(),
-                error=str(e),
-                error_type="BashPermissionError",
-                execution_time=time.time() - start,
-            )
-            return self._to_sandbox_dict(cr)
-        except Exception as e:
-            cr = CoderResult(
-                success=False,
-                stdout=stdout_capture.getvalue(),
-                error=str(e),
-                error_type=type(e).__name__,
-                execution_time=time.time() - start,
-            )
-            return self._to_sandbox_dict(cr)
-
-    # ─────────────────────────────────────────────────────────────
-    # Sync / Async runners
-    # ─────────────────────────────────────────────────────────────
-
-    def _run_sync(
-        self,
-        code: str,
-        namespace: Dict,
-        stdout_capture: io.StringIO,
-    ) -> Dict[str, Any]:
-        try:
-            with redirect_stdout(stdout_capture):
-                exec(code, namespace)  # noqa: S102 — deliberate, scoped
-            return {}
-        except Exception as e:
-            return {"error": str(e), "error_type": type(e).__name__}
-
-    async def _run_async(
-        self,
-        code: str,
-        namespace: Dict,
-        stdout_capture: io.StringIO,
-    ) -> Dict[str, Any]:
-        namespace["asyncio"] = asyncio
-        try:
-            with redirect_stdout(stdout_capture):
-                exec(code, namespace)  # noqa: S102
-                entry = None
-                if "main" in namespace and callable(namespace["main"]):
-                    entry = namespace["main"]
-                elif "run" in namespace and callable(namespace["run"]):
-                    entry = namespace["run"]
-                if entry is not None:
-                    returned = await entry()
-                    # What the entry point returns is the outcome. Code that
-                    # assigns `result` itself still wins when it returns nothing.
-                    if returned is not None:
-                        namespace["result"] = returned
-            return {}
-        except Exception as e:
-            return {"error": str(e), "error_type": type(e).__name__}
 
     # ─────────────────────────────────────────────────────────────
     # Namespace
@@ -1430,27 +1344,17 @@ class CoderSandbox:
             "textwrap": textwrap,
         }
 
-        # ── nexus_call: the ONLY way to call provider APIs ──────────────
-        # Resolves credentials internally via NexusCallProxy.
-        # Sandbox code sees nexus_call(method, url, **kwargs) → response dict.
-        # Credentials are NEVER in the namespace.
-        _conn_id = (context or {}).get("_nexus_connection_id") if context else None
-        if self._nexus_call_proxy and _conn_id:
-            from jarviscore.nexus.call_proxy import NexusCallProxy
-            namespace["nexus_call"] = self._recording_nexus_call(
-                NexusCallProxy.make_nexus_call_fn(self._nexus_call_proxy, _conn_id),
-                str((context or {}).get("_nexus_provider") or _conn_id),
+        # ── nexus_call ───────────────────────────────────────────────────
+        # Generated code runs in a confined child process, where nexus_call is an
+        # RPC the parent decides on (atom authority, operation contract, policy).
+        # This namespace only describes the sandbox to the model; it never holds a
+        # live nexus_call, so nothing can reach a provider from here unmediated.
+        async def _nexus_described(method: str, url: str, **kwargs):
+            raise RuntimeError(
+                "nexus_call runs inside the sandbox's child process, where each call "
+                "is decided on before it leaves."
             )
-        else:
-            # No Nexus connection available — inject a stub that raises clearly
-            async def _nexus_unavailable(method: str, url: str, **kwargs):
-                raise RuntimeError(
-                    "No provider account is connected for this task, so this call "
-                    "cannot be signed. Name the provider you need with "
-                    "write_code(system=...), and if it is registered but not yet "
-                    "connected, request_access will ask someone to approve it."
-                )
-            namespace["nexus_call"] = _nexus_unavailable
+        namespace["nexus_call"] = _nexus_described
 
         # ── Safe context injection (explicit allowlist) ──────────────────
         # Only non-credential task metadata is passed into the sandbox.
@@ -1557,7 +1461,9 @@ class CoderSandbox:
                 snapshot[str(path)] = path.stat().st_mtime_ns
         return snapshot
 
-    async def _collect_artifacts(self, cr: "CoderResult", before: Dict[str, float]) -> None:
+    async def _collect_artifacts(
+        self, cr: "CoderResult", before: Dict[str, float], context: Optional[Dict] = None,
+    ) -> None:
         """Hand what the run produced to storage, and report it as a handle.
 
         An agent that downloads a file has to be able to say what it produced
@@ -1568,6 +1474,8 @@ class CoderSandbox:
         produced = [p for p, stamp in after.items() if before.get(p) != stamp]
         if not produced:
             return
+        # What the files came from is what made them: the code that just ran.
+        origin = str(((context or {}).get("_atom_authority") or {}).get("code_origin") or "model")
 
         for path in sorted(produced):
             local = Path(path)
@@ -1578,10 +1486,19 @@ class CoderSandbox:
                 "key": None,
             }
             if self.blob_storage is not None:
+                from jarviscore.control.effects import Effect, EffectDenied, content_digest, mediated
+
                 key = f"{self.artifact_prefix}/{record['name']}"
+                payload = local.read_bytes()
                 try:
-                    await self.blob_storage.save(key, local.read_bytes())
+                    with mediated(
+                        Effect("artifact", "publish", target=key, origin=origin, attributes=content_digest(payload)),
+                        workflow_id=(context or {}).get("workflow_id"), step_id=(context or {}).get("step_id"),
+                    ):
+                        await self.blob_storage.save(key, payload)
                     record["key"] = key
+                except EffectDenied as exc:
+                    record["error"] = f"Not published: {exc}"
                 except Exception as exc:  # noqa: BLE001 - storage must not fail the run
                     logger.warning("Could not store artifact %s: %s", key, exc)
                     record["error"] = str(exc)

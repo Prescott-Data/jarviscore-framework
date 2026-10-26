@@ -125,9 +125,12 @@ class Workflow:
         """
         if redis_store:
             try:
+                from jarviscore.auth.principal import registered
+
                 redis_store.init_workflow_graph(
                     self.workflow_id,
                     [s.to_dict() for s in self.steps],
+                    context=registered(),
                 )
                 redis_store.register_active_workflow(self.workflow_id)
                 self._registered = True
