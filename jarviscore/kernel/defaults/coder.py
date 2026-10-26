@@ -2416,7 +2416,8 @@ capability; if one fails, report what failed.
                     return {
                         "status": "error",
                         "error": (
-                            f"{name} was not sent for approval: policy refuses it "
+                            f"Your organisation's policy refuses {name}, so nothing was sent to "
+                            f"{atom.system} and no one was asked to approve it "
                             f"({'; '.join(c['reason'] for c in refused)}). Only values on "
                             "record can be sent; if those are not what the task asks for, "
                             "report that instead."
