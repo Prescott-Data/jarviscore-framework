@@ -146,6 +146,14 @@ class ChatSurface:
         return []
 
 
+def _exact_action(action: Dict[str, Any]) -> str:
+    """Exactly what runs if it is approved: the call and every argument, else its description."""
+    params = action.get("params") if isinstance(action.get("params"), dict) else {}
+    if action.get("tool") and params:
+        return f"{action['tool']}({', '.join(f'{name}={value}' for name, value in params.items())})"
+    return str(action.get("description") or "")
+
+
 def _who_may_approve(requirement: Any) -> str:
     """Who policy accepts as the approver of an action, in words (empty when anyone may)."""
     if not isinstance(requirement, dict):
@@ -512,7 +520,7 @@ class RoomConversation:
                     "kind": "approval",
                     "title": action.get("consequence") or action.get("description") or "",
                     "content": action.get("consequence") or action.get("description") or "",
-                    "action": action.get("description") or "",
+                    "action": _exact_action(action),
                     "needs": _who_may_approve(payload.get("requirement")),
                     "asked_by": str(payload.get("requester") or ""),
                     "checks": payload.get("checks") or [],
@@ -874,7 +882,9 @@ class RoomConversation:
             await asyncio.to_thread(approval.record_decision, store, workflow, step, action_id, decision,
                                     note=response, approver=who)
         except ApprovalRefused as exc:
-            raise RoomPermissionError(str(exc).replace(person.key, person.display)) from None
+            raise RoomPermissionError(
+                str(exc).replace(repr(person.key), person.display).replace(person.key, person.display)
+            ) from None
         store.resume_workflow_step(workflow, step)
         approved = normalize_hitl_decision(decision) in APPROVED_DECISIONS
         await self.surface.say(root, f"{person.display} {'approved' if approved else 'declined'}: "

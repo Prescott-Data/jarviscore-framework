@@ -740,8 +740,8 @@ async def test_an_action_the_rooms_work_waits_on_is_approved_in_the_room_by_who_
         await conversation.press(erin, APPROVE, shown["id"], None)
         await conversation.press(dave, APPROVE, shown["id"], None)
         refusals = [p.text for p in surface.posts if p.notice]
-        assert "who holds claims.approve" in refusals[0] and "Erin" in refusals[0]
-        assert "may not also approve" in refusals[1]
+        assert refusals[0] == "This action needs an approver who holds claims.approve; Erin does not."
+        assert refusals[1] == "Dave asked for this action and may not also approve it."
         await asyncio.sleep(0.2)
         assert Payer.paid == [] and not asking.done()
 
