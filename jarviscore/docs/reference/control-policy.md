@@ -1,7 +1,7 @@
 ---
 icon: material/file-cog
 title: "Control Policy Reference: Every Section, Key and Built-in Rule"
-description: "The complete schema of JarvisCore's control policy file (rules, approvals, principals, grounding, effects, scopes), the built-in refusals, the journal's event kinds, and the Python API."
+description: "Every section of the JarvisCore control policy file: rules, approvals, grounding, effects and scopes, plus built-in refusals."
 ---
 
 # Control Policy Reference

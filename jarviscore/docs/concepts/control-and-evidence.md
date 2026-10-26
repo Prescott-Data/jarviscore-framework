@@ -1,7 +1,7 @@
 ---
 icon: material/scale-balance
-title: "Control and Evidence: Decided Before It Leaves, Recorded So It Can Be Checked"
-description: "How JarvisCore decides on every provider call before any network I/O, refuses what policy does not allow in strict mode, and records each decision in a hash-linked journal anyone can verify offline."
+title: "Control and Evidence: Decided First, Recorded to Check"
+description: "How JarvisCore decides on every agent effect before it happens, records it in a verifiable journal, and lets you replay any run."
 ---
 
 # Control and Evidence
