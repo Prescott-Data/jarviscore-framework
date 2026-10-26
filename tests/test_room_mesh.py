@@ -193,7 +193,7 @@ async def test_a_revision_starts_from_what_the_earlier_attempt_wrote(team):
     objective = coder.tasks[-1]["context"]["objective"]
     assert "The earlier attempt wrote src/app.py, test_app.py. Keep the work in the same files" in objective
     assert "--- src/app.py, as the earlier attempt wrote it ---\nVERSION = 'v2'" in objective
-    assert "put new work in a new file" in objective
+    assert "put new work in a new file" in coder.tasks[-1]["context"]["work_method"]
 
 
 async def test_work_on_a_proposal_another_revision_replaced_files_nothing(team):
@@ -254,9 +254,10 @@ async def test_the_planner_is_told_the_room_files_the_proposal(team):
     asked = await room.ask("Fix the app and send it as a proposal", asked_by=alice, timeout=20,
                            plan_template=plan("Fix the app", ("fix", "coding", [])))
 
-    planned = room.redis_store.get_workflow_goal(asked.workflow_id)["goal"]
-    assert planned.startswith("Fix the app and send it as a proposal")
-    assert planned.endswith(ROOM_WORK_CONTRACT)
+    planned = room.redis_store.get_workflow_goal(asked.workflow_id)
+    assert planned["goal"] == "Fix the app and send it as a proposal", "the method is not something asked"
+    assert planned["context"]["work_method"] == ROOM_WORK_CONTRACT
+    assert room.mesh._planning_brief(planned["context"]) == ROOM_WORK_CONTRACT
     started = next(e for e in room.events() if e["type"] == "ask.started")
     assert started["goal"] == "Fix the app and send it as a proposal", "the room records what was asked"
 

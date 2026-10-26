@@ -1826,6 +1826,23 @@ async def test_the_audit_knows_proposing_is_how_shared_files_change():
 
 
 @pytest.mark.asyncio
+async def test_the_planner_is_told_what_doing_work_for_a_person_means():
+    """A bare acting_for became plan steps to "resolve the person's own account" before acting."""
+    llm = MockLLMClient(responses=responses())
+    planner = MeshPlanner(llm, capabilities={"research": "Research evidence"})
+
+    await planner.plan("Find evidence", {"acting_for": "acme/dave", "room": {"id": "claims"}})
+
+    prompts = " ".join(call["messages"][0]["content"] for call in llm.calls)
+    assert '"acting_for"' not in prompts
+    assert "acme/dave. Every step runs as this person" in prompts
+    assert "No step finds, resolves or checks their account, identity or authority." in prompts
+    audit = next(call["messages"][0]["content"] for call in llm.calls
+                 if call["messages"][0]["content"].startswith("Audit"))
+    assert "Never require a step to find, resolve or name that person's account" in audit
+
+
+@pytest.mark.asyncio
 async def test_a_plan_cut_off_by_the_output_allowance_says_how_to_raise_it():
     """A reasoning model can spend its whole allowance thinking and return no plan."""
 

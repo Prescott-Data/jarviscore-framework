@@ -37,6 +37,8 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 
 ### Fixed
 
+- **Room work plans in a third of the time.** The room's rules for taking work back are now a planning brief instead of part of the request, so they no longer become obligations every plan had to repair. The planner is told that work done for a person runs with their own accounts, so plans no longer add steps to find that account, and the plan audit no longer rejects them for it. In our live runs a one-step request in a room went from 30–160 s of planning (5–8 model calls) to about 10 s (3 calls).
+
 - **Action approvals in rooms.** An integration action that needs approval now appears in the room's thread with **Approve** and **Decline**, held to the approval rules and scopes. Before, the step waited with nothing to approve. Surfaces can override `ChatSurface.show_approval`; the default posts a message. See [Chat Surfaces](guides/chat-surfaces.md#what-a-surface-implements).
 - **Rooms ask for a missing account.** When room work needs a system the person who asked has not connected, that person is asked privately to connect it (`ChatSurface.show_connect`, a Nexus consent link), and the work goes on once they have. Before, the step waited with no one told.
 - **Room work in connected systems.** Asking a room's agents to act in a system (approve a claim, send a message) no longer has to produce a file to be planned.
