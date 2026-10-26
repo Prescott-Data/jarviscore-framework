@@ -90,7 +90,7 @@ function initLLMWidget() {
     // This works on localhost and production with zero fetch/CORS issues.
     var embedded = document.getElementById('jc-page-source');
     if (embedded) {
-      var src = embedded.textContent || embedded.innerHTML || '';
+      var src = embedded.value || embedded.textContent || '';
       if (src.trim()) {
         callback(src);
         return;
