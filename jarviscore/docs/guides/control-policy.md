@@ -1,7 +1,7 @@
 ---
 icon: material/shield-check
 title: "Turning On Control: From Report Mode to Strict, Step by Step"
-description: "How to put JarvisCore's deterministic controls in front of your agents: record what they do, review what strict mode would refuse, write and check a control policy, switch to strict, and hand over evidence."
+description: "Turn on JarvisCore control step by step: record what agents do, review what strict mode would refuse, write a policy, go strict."
 ---
 
 # Turning On Control

@@ -1,7 +1,7 @@
 ---
 icon: material/account-key
-title: "Agents That Act for Your Users: Tenants, Consent, Scopes, Mandates and Evidence"
-description: "How to run JarvisCore agents on behalf of your application's own users and tenants: whom work is for, connecting each user's accounts, limiting what they delegate, approvals from your sign-in, and per-tenant evidence for their auditors."
+title: "Agents That Act for Your Users: Tenants, Scopes and Evidence"
+description: "Run agents for your own users and tenants: their own credentials, your organisation's scopes, delegated limits, and per-tenant evidence."
 ---
 
 # Agents That Act for Your Users
