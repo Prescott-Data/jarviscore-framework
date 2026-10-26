@@ -216,6 +216,17 @@ _DEFAULT_PRICING = {"input": 3.0, "output": 15.0}
 _UNPRICED_WARNED: set = set()
 
 
+# Claude models that refuse sampling parameters (`temperature` is a 400): Opus 4.7 and 4.8,
+# the 5 family (Opus, Sonnet, Haiku), Fable and Mythos, and later generations.
+_SAMPLING_REFUSED = re.compile(
+    r"claude-(?:opus-4-[7-9]|(?:opus|sonnet|haiku)-(?:[5-9]|\d\d)|fable|mythos)"
+)
+
+
+def _claude_accepts_sampling(model: str) -> bool:
+    return not _SAMPLING_REFUSED.search(model or "")
+
+
 def _call_cost(
     model: str, input_tokens: int, output_tokens: int, cached_tokens: int = 0,
     default: Optional[Dict[str, float]] = None,
@@ -1427,13 +1438,14 @@ class UnifiedLLMClient:
         request_kwargs = {
             "model": model,
             "max_tokens": max_tokens,
-            "temperature": temperature,
             "messages": conv_messages
         }
+        if _claude_accepts_sampling(model):
+            request_kwargs["temperature"] = temperature
         if tools:
             request_kwargs["tools"] = native_tools.anthropic_tools(tools)
             request_kwargs["tool_choice"] = native_tools.anthropic_tool_choice(
-                tool_choice, parallel_tool_calls
+                tool_choice, parallel_tool_calls, model
             )
 
         # Only add system if it exists (Claude API requires it to be string or not present)

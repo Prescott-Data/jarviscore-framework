@@ -13,6 +13,7 @@ native shape; the adapters in :mod:`jarviscore.execution.llm` call them.
 import base64
 import json
 import uuid
+import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from jarviscore.execution import multimodal
@@ -126,8 +127,21 @@ def anthropic_tools(tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     ]
 
 
-def anthropic_tool_choice(tool_choice: Any, parallel_tool_calls: Optional[bool]) -> Dict[str, Any]:
+# Claude models that refuse forced tool use (`any` / `tool` is a 400): Opus and Sonnet 5.5,
+# Fable and Mythos 5.1, and later generations. They are asked with `auto`; a turn that answers
+# in text instead is a raw turn, which the Kernel already handles.
+_UNFORCEABLE_CLAUDE = re.compile(
+    r"claude-(?:(?:opus|sonnet)-5-(?:[5-9]|\d\d)|(?:fable|mythos)-5-(?:[1-9]|\d\d)"
+    r"|(?:opus|sonnet|haiku|fable|mythos)-(?:[6-9]|\d\d))"
+)
+
+
+def anthropic_tool_choice(
+    tool_choice: Any, parallel_tool_calls: Optional[bool], model: str = ""
+) -> Dict[str, Any]:
     choice = {"required": "any", "auto": "auto", "none": "none"}.get(tool_choice, "auto")
+    if choice == "any" and _UNFORCEABLE_CLAUDE.search(model or ""):
+        choice = "auto"
     selected: Dict[str, Any] = {"type": choice}
     if parallel_tool_calls is False and choice != "none":
         selected["disable_parallel_tool_use"] = True
