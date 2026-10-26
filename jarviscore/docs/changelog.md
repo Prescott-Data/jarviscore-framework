@@ -38,6 +38,9 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 ### Fixed
 
 - **Action approvals in rooms.** An integration action that needs approval now appears in the room's thread with **Approve** and **Decline**, held to the approval rules and scopes. Before, the step waited with nothing to approve. Surfaces can override `ChatSurface.show_approval`; the default posts a message. See [Chat Surfaces](guides/chat-surfaces.md#what-a-surface-implements).
+- **Rooms ask for a missing account.** When room work needs a system the person who asked has not connected, that person is asked privately to connect it (`ChatSurface.show_connect`, a Nexus consent link), and the work goes on once they have. Before, the step waited with no one told.
+- **Room work in connected systems.** Asking a room's agents to act in a system (approve a claim, send a message) no longer has to produce a file to be planned.
+- **The room agent starts work only in the room.** It no longer has the peer tools (`ask_peer`, `ask_capability`), which did work out of the room's sight and held the turn until the peer answered.
 - **Your own systems through Nexus.** A provider registered in Nexus with an `api_base_url` (an in-house claims or ERP system) can now be called on that host. Before, only hosts in the shipped catalogue were accepted, so its credential was refused everywhere.
 
 </div>

@@ -25,6 +25,9 @@ everything multiplayer about it, so a surface only moves messages:
   waiting for approval), it is asked in the thread of that work, and the
   room's editors answer it there. An approval is decided by the person the
   surface signed in, held to the deployment's approval rules and scopes.
+- **Their own accounts.** When work needs a system the person it is for has
+  not connected, that person alone is asked to connect their own account
+  (through Nexus); once they have, the work goes on.
 
 Implement ``ChatSurface`` for your product and drive the conversation with
 ``receive``/``handle`` (or ``hear``) and ``press``.
@@ -60,6 +63,8 @@ DECLINE = "decline"
 
 #: Prefix of the id of a question that is an action waiting for approval.
 ACTION_QUESTION = "action:"
+#: Prefix of the id of a request for a person to connect an account the work needs.
+CONNECT_REQUEST = "connect:"
 
 #: Decisions the room agent may prepare for a person to confirm.
 DECISIONS = ("accept", "reject", "release", "discard", "answer")
@@ -111,6 +116,20 @@ class ChatSurface:
         needs = f"\n{question['needs']}" if question.get("needs") else ""
         return await self.say(thread, f"🙋 The agents need sign-off: {question.get('title')}",
                               detail=f"{question.get('action') or ''}{needs}", to=to)
+
+    #: Where a person lands after connecting an account (your page), or None for Nexus's own.
+    connect_return_url: Optional[str] = None
+
+    async def show_connect(self, thread: Optional[str], request: Dict[str, Any], *, to: Person) -> str:
+        """Ask ``to``, and only them, to connect their own account that the work needs.
+
+        ``request`` holds ``provider``, ``title`` and ``auth_url``, where they consent
+        (empty when this deployment cannot connect accounts). The work goes on by
+        itself once they have connected. By default, a private message with the link.
+        """
+        link = f"\n{request['auth_url']}" if request.get("auth_url") else ""
+        return await self.say(thread, f"🔗 {request.get('title')}",
+                              detail=f"{request.get('detail') or ''}{link}", to=to)
 
     async def audience(self, room: Room) -> Optional[str]:
         """Why this surface may not show ``room`` now, or None if it may.
@@ -188,6 +207,7 @@ class RoomConversation:
         self._lease_seconds = max(10.0, poll_interval * 10)
         self._failures: Dict[str, int] = {}  # item -> failed posts in a row
         self._memory_task: Optional[asyncio.Task] = None
+        self._connect_checked: Dict[str, float] = {}  # request -> when its connection was last checked
 
     # ── Saved state ─────────────────────────────────────────────────────────
     #
@@ -334,6 +354,8 @@ class RoomConversation:
     #: Posts of one item that may fail in a row before it is skipped, so one
     #: update the surface refuses cannot hold back everything after it.
     max_post_failures = 5
+    #: How often to check whether a person asked to connect an account has done so.
+    connect_check_seconds = 3.0
 
     async def sync(self) -> None:
         """Post every room event and question since the last delivered one.
@@ -372,6 +394,7 @@ class RoomConversation:
                 self.store.mark_delivered(self.room.key, self.surface.key, key, posted or "")
             self._save_cursor(item.cursor)
         await self._post_questions()
+        await self._ask_to_connect()
 
     async def _once(self, key: str, part: str, post) -> str:
         """Post one part of an item once, even when the item is retried."""
@@ -540,6 +563,77 @@ class RoomConversation:
                 thread, f"🙋 The agents need {asks}: {question.get('title')}{note}", detail=detail)
             self._remember("asked", question["id"], thread or posted)
             self.store.mark_delivered(self.room.key, self.surface.key, key, posted or "")
+
+    def _waiting_connections(self) -> List[Dict[str, Any]]:
+        """Room work waiting for the person it is for to connect an account it needs."""
+        from jarviscore.room.work import unfinished
+
+        found = []
+        for started in unfinished(self.room):
+            workflow, person = started["workflow_id"], str(started.get("by") or "")
+            for step in sorted(self.store.get_all_step_ids(workflow)):
+                if self.store.get_step_status(workflow, step) != "waiting":
+                    continue
+                output = (self.store.get_step_output(workflow, step) or {}).get("output")
+                waiting = (output or {}).get("yield_metadata") if isinstance(output, dict) else None
+                if not isinstance(waiting, dict) or waiting.get("typed_outcome") != "YIELD_AUTH_REQUIRED":
+                    continue
+                provider = str(waiting.get("system") or "")
+                if provider and person:
+                    found.append({
+                        # One request per time the step waited: a step that waits again asks again.
+                        "id": f"{CONNECT_REQUEST}{workflow}:{step}:{output.get('result_id') or ''}",
+                        "provider": provider, "person": person,
+                        "context": {"workflow_id": workflow, "step_id": step},
+                    })
+        return found
+
+    async def _ask_to_connect(self) -> None:
+        """Ask each person whose work waits on an account of theirs to connect it, and let
+        the work go on once they have."""
+        mesh = getattr(self.room, "mesh", None)
+        for request in self._waiting_connections():
+            key, person = f"question:{request['id']}", self._person(request["person"])
+            context, provider = request["context"], request["provider"]
+            thread = self._threads.get(f"wf:{context['workflow_id']}")
+            if self.store.delivered(self.room.key, self.surface.key, key) is None:
+                auth_url = ""
+                if mesh is not None:
+                    try:
+                        started = await mesh.connect(provider, on_behalf_of=person.key,
+                                                     return_url=self.surface.connect_return_url)
+                        auth_url = started.get("auth_url") or ""
+                    except Exception as exc:  # noqa: BLE001 - asked without a link, and logged
+                        logger.warning("Room %s: could not start connecting %s for %s: %s",
+                                       self.room.key, provider, person.key, exc)
+                detail = (f"The agents work with your own {provider} account, and only for what you "
+                          "ask. Connect it once; this work goes on by itself."
+                          if auth_url else
+                          f"This deployment cannot connect {provider} accounts; ask whoever runs it.")
+                posted = await self.surface.show_connect(thread, {
+                    "id": request["id"], "provider": provider, "auth_url": auth_url, "detail": detail,
+                    "title": f"Connect your {provider} account to go on with this work",
+                }, to=person)
+                self.store.mark_delivered(self.room.key, self.surface.key, key, posted or "")
+                self._connect_checked[request["id"]] = time.monotonic()
+                continue
+            if (mesh is None or time.monotonic() - self._connect_checked.get(request["id"], 0)
+                    < self.connect_check_seconds):
+                continue
+            self._connect_checked[request["id"]] = time.monotonic()
+            try:
+                ready = await mesh.connected(provider, on_behalf_of=person.key)
+            except Exception as exc:  # noqa: BLE001 - checked again on the next sync
+                logger.debug("Room %s: connection check failed: %s", self.room.key, exc)
+                continue
+            if not ready:
+                continue
+            try:
+                self.store.resume_workflow_step(context["workflow_id"], context["step_id"])
+            except (KeyError, ValueError):
+                continue  # it went on already
+            self._connect_checked.pop(request["id"], None)
+            await self.surface.say(thread, f"{person.display} connected {provider}; the work goes on.")
 
     # ── People → room ───────────────────────────────────────────────────────
 

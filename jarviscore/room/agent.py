@@ -197,8 +197,9 @@ Finish as soon as you have acted, or decided to stay quiet."""
                            "What a proposal changes, as a diff. Params: {\"proposal\": \"p-1a2b3c4d\"} "
                            "(default: the thread's proposal)", phase="thinking")
         self.register_tool("ask_agents", self._tool_ask_agents,
-                           "Ask the team's agents to do work on the room's files; their changes come "
-                           "back as a proposal in this thread. Params: {\"goal\": \"<the request, "
+                           "Ask the team's agents to do work, on the room's files or in the systems "
+                           "they work in; changes to files come back as a proposal in this thread. "
+                           "Params: {\"goal\": \"<the request, "
                            "complete enough to act on alone>\", \"title\": \"<a short name for the "
                            "work, up to 8 words>\"}", phase="action")
         self.register_tool("update_work", self._tool_update_work,
@@ -466,6 +467,11 @@ class RoomKernel(Kernel):
             agent_id=agent_id, llm_client=self.llm_client, room_agent=self._room_agent,
             redis_store=self.redis_store, blob_storage=self.blob_storage)
         self._attach_mesh_tools(subagent)
+        # The room's work goes through ask_agents, so it is done for the person who asked, in
+        # its thread, with its proposals and approvals there. Asking a peer directly would do
+        # it out of the room's sight, and hold the turn until the peer answered.
+        for name in getattr(self.peer_tool, "tool_names", ()):
+            subagent._tools.pop(name, None)
         return subagent
 
 

@@ -255,6 +255,7 @@ Sometimes the work needs a person: a figure only finance has, or sign-off before
 
 - **An agent asks for sign-off.** When an AutoAgent stops a step for a person ([HITL](hitl.md)), the step waits. The question appears in the work's thread, marked as needing sign-off. Someone says "yes, send it"; the room agent prepares the approval; they confirm; the step resumes with their answer.
 - **An action waits for approval.** When an integration's action needs a person ([who may approve](hitl.md#who-may-approve)), the exact action appears in the work's thread with **Approve** and **Decline**. Only someone the policy accepts can approve it; the step then goes on and the action runs once.
+- **The work needs someone's own account.** When the agents need a system the person who asked has not connected (through [Nexus](nexus.md)), that person alone is asked to connect it. Once they have, the work goes on.
 - **The planner routes a step to people.** Put the team on the mesh as a [human peer](human-peers.md) with the capabilities only people have:
 
     ```python

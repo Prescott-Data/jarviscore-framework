@@ -174,6 +174,22 @@ class TestTheAgent:
         params = " ".join(t.description.split("Params:", 1)[-1] for t in tools.values())
         assert '"person"' not in params and '"by"' not in params, "who acts is never a parameter"
 
+    def test_it_starts_work_in_the_room_not_by_asking_a_peer_directly(self):
+        """Work asked of a peer directly is done out of the room's sight: no thread, no proposal,
+        no approval in the room. The room role starts work with ask_agents only."""
+        from types import SimpleNamespace
+
+        from jarviscore.room.agent import ROOM_ROLE, RoomKernel
+
+        kernel = RoomKernel(llm_client=None, room_agent=RoomAgent())
+        kernel.peer_tool = SimpleNamespace(
+            tool_names=["ask_peer", "ask_capability", "broadcast_update", "list_peers"],
+            schema=[{"name": n, "description": n, "parameters": {}} for n in
+                    ("ask_peer", "ask_capability", "broadcast_update", "list_peers")])
+        tools = kernel._create_subagent(ROOM_ROLE, "room-1")._tools
+        assert "ask_agents" in tools
+        assert not {"ask_peer", "ask_capability", "broadcast_update", "list_peers"} & set(tools)
+
     async def test_converse_needs_an_authenticated_person(self, room):
         with pytest.raises(TypeError, match="Person who spoke"):
             await RoomAgent().converse(room, "alice", "ship it")

@@ -193,7 +193,7 @@ async def test_a_revision_starts_from_what_the_earlier_attempt_wrote(team):
     objective = coder.tasks[-1]["context"]["objective"]
     assert "The earlier attempt wrote src/app.py, test_app.py. Keep the work in the same files" in objective
     assert "--- src/app.py, as the earlier attempt wrote it ---\nVERSION = 'v2'" in objective
-    assert "Put new work in a new file" in objective
+    assert "put new work in a new file" in objective
 
 
 async def test_work_on_a_proposal_another_revision_replaced_files_nothing(team):
@@ -778,3 +778,88 @@ async def test_a_declined_action_in_the_room_never_runs(claims_room):
     finally:
         following.cancel()
         await asyncio.gather(following, return_exceptions=True)
+
+
+class Filer(CustomAgent):
+    """Files claims in ClaimsHub with the asking person's own account, once they have connected it."""
+    role = "filer"
+    capabilities = ["claims_filing"]
+    connected = set()
+    filed = []
+
+    async def execute_task(self, task):
+        import uuid as _uuid
+
+        person = acting_for.get()
+        if person not in Filer.connected:
+            return {"status": "yield", "result_id": _uuid.uuid4().hex,
+                    "error": "This task needs claimshub, which is not connected here.",
+                    "yield_metadata": {"yield_pending": True, "typed_outcome": "YIELD_AUTH_REQUIRED",
+                                       "hitl_type": "auth", "system": "claimshub"}}
+        Filer.filed.append(person)
+        return {"status": "success", "output": "Filed CLM-9"}
+
+
+async def test_work_needing_an_account_asks_its_person_to_connect_it_then_goes_on(tmp_path, monkeypatch):
+    from jarviscore.room import RoomConversation
+    from jarviscore.testing.rooms import MemorySurface, ScriptedRoomAgent
+
+    redis = RedisContextStore(client=fakeredis.FakeRedis(decode_responses=True))
+    monkeypatch.setattr(Mesh, "_init_redis", lambda self, settings: redis)
+    monkeypatch.setattr(Mesh, "_init_blob_storage",
+                        lambda self, settings: LocalBlobStorage(str(tmp_path / "blobs")))
+    monkeypatch.setattr(Mesh, "_init_nexus", lambda self: None)
+    monkeypatch.setattr(Mesh, "_init_athena", lambda self, settings: None)
+    monkeypatch.delenv("NEXUS_GATEWAY_URL", raising=False)
+    mesh = Mesh(config={"p2p_enabled": False, "distributed_poll_interval": 0.02,
+                        "hitl_inbox_dir": str(tmp_path / "hitl")})
+    mesh.add(Filer)
+    Filer.connected, Filer.filed = set(), []
+    asked_to_connect = []
+
+    async def connect(provider, *, on_behalf_of, return_url=None, provider_scopes=None):
+        asked_to_connect.append((provider, on_behalf_of, return_url))
+        return {"auth_url": f"https://nexus.example/consent?for={on_behalf_of}", "connection_id": "c1"}
+
+    async def connected(provider, *, on_behalf_of):
+        return on_behalf_of in Filer.connected
+
+    monkeypatch.setattr(mesh, "connect", connect)
+    monkeypatch.setattr(mesh, "connected", connected)
+    await mesh.start()
+    room = Room.for_mesh(mesh, "claims", tenant="acme")
+    erin = Person("acme", "erin", "Erin")
+    await room.ensure({"queue.md": "# Claims\n"}, by=alice)
+    room.set_role(erin, "editor", by=alice)
+    surface = MemorySurface()
+    surface.connect_return_url = "https://desk.example/connected"
+    conversation = RoomConversation(room, ScriptedRoomAgent(), surface, poll_interval=0.01)
+    conversation.connect_check_seconds = 0.05
+    await conversation.start()
+    following = asyncio.create_task(conversation.follow())
+    try:
+        asking = asyncio.create_task(room.ask(
+            "File CLM-9", asked_by=erin, timeout=20, workflow_id="room-claims-file-1",
+            plan_template=plan("File CLM-9", ("file", "claims_filing", []))))
+        for _ in range(500):
+            if surface.connects:
+                break
+            await asyncio.sleep(0.02)
+        [request] = surface.connects
+        assert request["to"] == "erin" and request["provider"] == "claimshub"
+        assert request["auth_url"] == "https://nexus.example/consent?for=acme/erin"
+        assert asked_to_connect == [("claimshub", "acme/erin", "https://desk.example/connected")]
+        assert not [p for p in surface.posts if "nexus.example" in p.detail and p.to != "erin"]
+        await asyncio.sleep(0.3)
+        assert Filer.filed == [] and not asking.done(), "nothing is done before she connects"
+
+        Filer.connected.add("acme/erin")
+        asked = await asyncio.wait_for(asking, 20)
+        assert asked.status == "completed", asked.result
+        assert Filer.filed == ["acme/erin"]
+        assert any(p.text == "Erin connected claimshub; the work goes on." for p in surface.posts)
+        assert len(surface.connects) == 1, "asked once"
+    finally:
+        following.cancel()
+        await asyncio.gather(following, return_exceptions=True)
+        await mesh.stop()

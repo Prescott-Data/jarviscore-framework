@@ -44,6 +44,8 @@ class MySurface(ChatSurface):
     # Optional:
     async def notice(self, thread, text, *, to) -> str: ...          # default: say(..., to=to)
     async def show_approval(self, thread, question, *, to=None) -> str: ...  # default: say(...)
+    async def show_connect(self, thread, request, *, to) -> str: ...       # default: say(..., to=to)
+    connect_return_url = None   # your page people land on after connecting an account
     async def audience(self, room) -> str | None: ...               # default: None (may show it)
     async def history(self, thread) -> list[dict]: ...              # default: []
 ```
@@ -54,6 +56,7 @@ class MySurface(ChatSurface):
 | `show_proposal` | show a proposal | posts `text` and the `diff` with **Accept** and **Full change** buttons; when `held`, shown `to` the person it is held for, with **Release** and **Discard** |
 | `confirm` | ask one person to confirm a decision the agent prepared | shows `decision["summary"]` to `to` alone, with **Confirm** and **Cancel**, whose target is `decision["id"]` |
 | `show_approval` | show an action the work waits on someone to approve | posts `question["title"]` (what it does) and `question["action"]` (exactly what runs), with `question["needs"]` (who may approve) and **Approve** and **Decline**, whose target is `question["id"]` |
+| `show_connect` | ask one person to connect their own account the work needs | shows `request["title"]` to `to` alone, with a link or button to `request["auth_url"]` (their consent page in Nexus). The work goes on by itself once they have connected |
 | `notice` | tell one person something brief (a refusal, "Cancelled.") | may be transient, like a Slack message only they see |
 | `audience` | check, before posting, that everyone who can see this place may see the room | returns why not, or None |
 | `history` | give the agent the thread's earlier messages it never received | returns `{"person", "text"}` |

@@ -59,12 +59,15 @@ class AskResult:
 
 
 #: What the room does with the work, for the planner: proposing is the room's job,
-#: so a request that says "return it as a proposal" is not an extra step to plan.
+#: so a request that says "return it as a proposal" is not an extra step to plan. Work
+#: done in a connected system (approving a claim, sending a message) writes no file.
 ROOM_WORK_CONTRACT = (
-    "This work is on the room's files. Put new work in a new file with a clear name, and "
-    "change an existing file only when the request is about that file. Every file written "
-    "in the room's folder is part of the change: the room files what changed as a proposal "
-    "for people to review, so no step needs to propose, present or deliver the changed files."
+    "This work is for the room. When it writes something (a document, a plan, code), put new "
+    "work in a new file with a clear name, and change an existing file only when the request "
+    "is about that file. Every file written in the room's folder is part of the change: the "
+    "room files what changed as a proposal for people to review, so no step needs to propose, "
+    "present or deliver the changed files. Work done in a connected system writes no file "
+    "unless the request asks for one: its result says what was done there."
 )
 
 #: How much of an earlier attempt a revision is shown, per file and in all.
