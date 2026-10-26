@@ -641,3 +641,140 @@ async def test_work_waits_for_a_person_and_goes_on_when_they_answer(tmp_path, mo
         assert (await room.read("plan.md")).decode() == "# Plan\n\nRewritten (yes, go ahead).\n"
     finally:
         await mesh.stop()
+
+
+class Payer(CustomAgent):
+    """Pays out a claim, as an integration does: the payment waits for a person's approval."""
+    role = "payer"
+    capabilities = ["claims_payment"]
+    store = None
+    paid = []
+
+    async def execute_task(self, task):
+        from jarviscore.contracts.hitl import HITLAction
+        from jarviscore.control.approvals import ApprovalRequirement
+        from jarviscore.kernel import approval
+
+        context = task["context"]
+        workflow, step = context["workflow_id"], context["step_id"]
+        action = HITLAction(
+            action_id="pay-CLM-1", tool="claimshub_pay_claim", system="claimshub",
+            params={"claim_id": "CLM-1", "amount": "4000.00"},
+            description="claimshub_pay_claim(claim_id=CLM-1, amount=4000.00)",
+            consequence="Pays out claim CLM-1: GBP 4,000.00 to Ada Okafor.",
+        )
+        requirement = ApprovalRequirement(required=True, rule="deployment:claims", scopes=("claims.approve",),
+                                          distinct_from=("requester",), assurance="asserted")
+        waiting = approval.gate(Payer.store, workflow, step, action, requirement=requirement)
+        if waiting is not None:
+            return waiting
+        Payer.paid.append(acting_for.get())
+        result = {"status": "success", "output": "Paid CLM-1"}
+        approval.settle(Payer.store, workflow, step, action.action_id, result)
+        return result
+
+
+@pytest.fixture
+async def claims_room(tmp_path, monkeypatch):
+    """A room whose work pays a claim; Carol may approve payments, Erin and Dave may not."""
+    import json as _json
+
+    from jarviscore.control import policy as policy_module
+    from jarviscore.evidence import journal as journal_module
+
+    policy = tmp_path / "policy.json"
+    policy.write_text(_json.dumps({"scopes": {"grants": {"acme/carol": {"claims.approve": {"amount": "10000"}}}}}))
+    monkeypatch.setenv("JARVISCORE_CONTROL_POLICY", str(policy))
+    monkeypatch.setenv("JARVISCORE_JOURNAL_DIR", str(tmp_path / "journal"))
+    monkeypatch.setattr(policy_module, "_cached", None)
+    monkeypatch.setattr(journal_module, "_journal", None)
+    redis = RedisContextStore(client=fakeredis.FakeRedis(decode_responses=True))
+    monkeypatch.setattr(Mesh, "_init_redis", lambda self, settings: redis)
+    monkeypatch.setattr(Mesh, "_init_blob_storage",
+                        lambda self, settings: LocalBlobStorage(str(tmp_path / "blobs")))
+    monkeypatch.setattr(Mesh, "_init_nexus", lambda self: None)
+    monkeypatch.setattr(Mesh, "_init_athena", lambda self, settings: None)
+    monkeypatch.delenv("NEXUS_GATEWAY_URL", raising=False)
+    mesh = Mesh(config={"p2p_enabled": False, "distributed_poll_interval": 0.02,
+                        "hitl_inbox_dir": str(tmp_path / "hitl")})
+    mesh.add(Payer)
+    Payer.store, Payer.paid = redis, []
+    await mesh.start()
+    room = Room.for_mesh(mesh, "claims", tenant="acme")
+    carol, dave, erin = (Person("acme", n, n.title()) for n in ("carol", "dave", "erin"))
+    await room.ensure({"queue.md": "# Claims\n"}, by=carol)
+    for person in (dave, erin):
+        room.set_role(person, "editor", by=carol)
+    yield room, carol, dave, erin
+    await mesh.stop()
+
+
+async def test_an_action_the_rooms_work_waits_on_is_approved_in_the_room_by_who_may(claims_room):
+    from jarviscore.room import APPROVE, RoomConversation
+    from jarviscore.testing.rooms import MemorySurface, ScriptedRoomAgent
+
+    room, carol, dave, erin = claims_room
+    surface = MemorySurface()
+    conversation = RoomConversation(room, ScriptedRoomAgent(), surface, poll_interval=0.01)
+    await conversation.start()
+    following = asyncio.create_task(conversation.follow())
+    try:
+        asking = asyncio.create_task(room.ask(
+            "Pay out CLM-1", asked_by=dave, timeout=20, workflow_id="room-claims-pay-1",
+            plan_template=plan("Pay out CLM-1", ("pay", "claims_payment", []))))
+        for _ in range(500):
+            if surface.approvals:
+                break
+            await asyncio.sleep(0.02)
+        [shown] = surface.approvals
+        assert shown["title"] == "Pays out claim CLM-1: GBP 4,000.00 to Ada Okafor."
+        assert shown["action"] == "claimshub_pay_claim(claim_id=CLM-1, amount=4000.00)"
+        assert "claims.approve" in shown["needs"] and "not the person who asked" in shown["needs"]
+        assert shown["asked_by"] == "Dave"
+
+        await conversation.press(erin, APPROVE, shown["id"], None)
+        await conversation.press(dave, APPROVE, shown["id"], None)
+        refusals = [p.text for p in surface.posts if p.notice]
+        assert "who holds claims.approve" in refusals[0] and "Erin" in refusals[0]
+        assert "may not also approve" in refusals[1]
+        await asyncio.sleep(0.2)
+        assert Payer.paid == [] and not asking.done()
+
+        await conversation.press(carol, APPROVE, shown["id"], None)
+        asked = await asyncio.wait_for(asking, 20)
+        assert asked.status == "completed", asked.result
+        assert Payer.paid == ["acme/dave"], "paid once, for the person who asked"
+        assert any(p.text.startswith("Carol approved: Pays out claim CLM-1") for p in surface.posts)
+        record = room.redis_store.get_hitl_request("room-claims-pay-1", "pay", "pay-CLM-1")
+        assert (record["approver"], record["assurance"]) == ("acme/carol", "asserted")
+        assert record["authenticated_by"] == "surface:memory"
+    finally:
+        following.cancel()
+        await asyncio.gather(following, return_exceptions=True)
+
+
+async def test_a_declined_action_in_the_room_never_runs(claims_room):
+    from jarviscore.room import DECLINE, RoomConversation
+    from jarviscore.testing.rooms import MemorySurface, ScriptedRoomAgent
+
+    room, carol, dave, _ = claims_room
+    surface = MemorySurface()
+    conversation = RoomConversation(room, ScriptedRoomAgent(), surface, poll_interval=0.01)
+    await conversation.start()
+    following = asyncio.create_task(conversation.follow())
+    try:
+        asking = asyncio.create_task(room.ask(
+            "Pay out CLM-1", asked_by=dave, timeout=20, workflow_id="room-claims-pay-2",
+            plan_template=plan("Pay out CLM-1", ("pay", "claims_payment", []))))
+        for _ in range(500):
+            if surface.approvals:
+                break
+            await asyncio.sleep(0.02)
+        await conversation.press(carol, DECLINE, surface.approvals[0]["id"], None)
+        await asyncio.wait_for(asking, 20)
+        assert Payer.paid == []
+        assert any(p.text.startswith("Carol declined") for p in surface.posts)
+        assert len(surface.approvals) == 1, "a decided action is not asked again"
+    finally:
+        following.cancel()
+        await asyncio.gather(following, return_exceptions=True)

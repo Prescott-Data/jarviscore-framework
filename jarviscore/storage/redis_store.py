@@ -3113,6 +3113,10 @@ class RedisContextStore:
             return None
         return HITLResolution.from_raw(raw)
 
+    def hitl_action_index(self, workflow_id: str) -> Dict[str, str]:
+        """Every consequential action a workflow raised for a decision: action id to step id."""
+        return dict(self._redis.hgetall(f"hitl_actions:{workflow_id}"))
+
     def get_hitl_action_step(self, workflow_id: str, action_id: str) -> Optional[str]:
         """The step whose consequential action ``action_id`` waits on a person."""
         return self._redis.hget(f"hitl_actions:{workflow_id}", action_id)

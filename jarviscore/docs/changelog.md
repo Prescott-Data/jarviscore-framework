@@ -33,6 +33,16 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 
 <div class="changelog-release" markdown>
 
+## Unreleased
+
+### Fixed
+
+- **Action approvals in rooms.** An integration action that needs approval now appears in the room's thread with **Approve** and **Decline**, held to the approval rules and scopes. Before, the step waited with nothing to approve. Surfaces can override `ChatSurface.show_approval`; the default posts a message. See [Chat Surfaces](guides/chat-surfaces.md#what-a-surface-implements).
+
+</div>
+
+<div class="changelog-release" markdown>
+
 ## 3.0.0 <span class="changelog-date">2026-10-26</span>
 
 ### Added

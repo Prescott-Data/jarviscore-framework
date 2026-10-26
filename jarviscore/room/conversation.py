@@ -21,8 +21,10 @@ everything multiplayer about it, so a surface only moves messages:
   for its asker (it used their private access) is shown to them alone until
   they release it.
 - **Agents asking people.** When the room's work needs a person (a step
-  routed to people, or an agent asking for sign-off), it is asked in the
-  thread of that work, and the room's editors answer it there.
+  routed to people, an agent asking for sign-off, or a consequential action
+  waiting for approval), it is asked in the thread of that work, and the
+  room's editors answer it there. An approval is decided by the person the
+  surface signed in, held to the deployment's approval rules and scopes.
 
 Implement ``ChatSurface`` for your product and drive the conversation with
 ``receive``/``handle`` (or ``hear``) and ``press``.
@@ -52,6 +54,12 @@ DISCARD = "discard"
 #: Buttons on a prepared decision, for the person who must confirm it.
 CONFIRM = "confirm"
 CANCEL = "cancel"
+#: Buttons on a consequential action the room's work waits on, for the room's editors.
+APPROVE = "approve"
+DECLINE = "decline"
+
+#: Prefix of the id of a question that is an action waiting for approval.
+ACTION_QUESTION = "action:"
 
 #: Decisions the room agent may prepare for a person to confirm.
 DECISIONS = ("accept", "reject", "release", "discard", "answer")
@@ -90,6 +98,20 @@ class ChatSurface:
         whose value is ``decision["id"]``. ``decision["summary"]`` says what it will do."""
         raise NotImplementedError
 
+    async def show_approval(self, thread: Optional[str], question: Dict[str, Any],
+                            *, to: Optional[Person] = None) -> str:
+        """Post a consequential action the room's work waits on, with APPROVE and
+        DECLINE buttons whose value is ``question["id"]``.
+
+        ``question`` holds ``title`` (what it does, in the agent's words),
+        ``action`` (exactly what runs: the element and values, or the call and
+        its arguments), ``needs`` (who may approve, when policy says) and
+        ``asked_by``. By default, a message the team answers in the thread.
+        """
+        needs = f"\n{question['needs']}" if question.get("needs") else ""
+        return await self.say(thread, f"🙋 The agents need sign-off: {question.get('title')}",
+                              detail=f"{question.get('action') or ''}{needs}", to=to)
+
     async def audience(self, room: Room) -> Optional[str]:
         """Why this surface may not show ``room`` now, or None if it may.
 
@@ -103,6 +125,20 @@ class ChatSurface:
         """Optional: earlier messages in a thread that never reached the room
         (such as people talking among themselves), as {"person", "text"}."""
         return []
+
+
+def _who_may_approve(requirement: Any) -> str:
+    """Who policy accepts as the approver of an action, in words (empty when anyone may)."""
+    if not isinstance(requirement, dict):
+        return ""
+    parts = []
+    if requirement.get("roles"):
+        parts.append("a " + " or ".join(requirement["roles"]))
+    if requirement.get("scopes"):
+        parts.append("someone who holds " + " and ".join(requirement["scopes"]))
+    if "requester" in (requirement.get("distinct_from") or []):
+        parts.append("not the person who asked")
+    return ("Needs " + ", ".join(parts) + ".") if parts else ""
 
 
 async def _cancellable(coro):
@@ -417,16 +453,50 @@ class RoomConversation:
 
     def _questions(self) -> List[Dict[str, Any]]:
         """What the room's own work is waiting on people for: questions routed to
-        people, and agents asking for sign-off. Nothing from other rooms or tenants."""
-        hitl = getattr(self.agent, "hitl", None)
-        if hitl is None:
-            return []
+        people, agents asking for sign-off, and consequential actions waiting for
+        approval. Nothing from other rooms or tenants."""
         workflows = {e.get("workflow_id") for e in self.room.events()
                      if e.get("type") == "ask.started" and e.get("workflow_id")}
-        return [q for q in hitl.inbox(tenant=self.room.tenant)
-                if q.get("kind") in ("input_request", "approval")
-                and ((q.get("context") or {}).get("mesh_workflow_id")
-                     or (q.get("context") or {}).get("workflow_id")) in workflows]
+        questions: List[Dict[str, Any]] = []
+        hitl = getattr(self.agent, "hitl", None)
+        if hitl is not None:
+            questions = [q for q in hitl.inbox(tenant=self.room.tenant)
+                         if q.get("kind") in ("input_request", "approval")
+                         and ((q.get("context") or {}).get("mesh_workflow_id")
+                              or (q.get("context") or {}).get("workflow_id")) in workflows]
+        return questions + self._waiting_actions(workflows)
+
+    def _waiting_actions(self, workflows) -> List[Dict[str, Any]]:
+        """Consequential actions the room's running work waits on a person to approve."""
+        from jarviscore.room.work import _ended
+
+        store = getattr(self.room, "redis_store", None)
+        if store is None or not hasattr(store, "hitl_action_index"):
+            return []
+        found = []
+        for workflow in sorted(w for w in workflows if w):
+            if _ended(self.room, workflow):
+                continue
+            for action_id, step_id in sorted(store.hitl_action_index(workflow).items()):
+                record = store.get_hitl_request(workflow, step_id, action_id) or {}
+                if record.get("status") != "pending" or not isinstance(record.get("action"), dict):
+                    continue
+                action, payload = record["action"], record.get("payload") or {}
+                if not isinstance(payload, dict):
+                    payload = {}
+                found.append({
+                    "id": f"{ACTION_QUESTION}{workflow}:{action_id}",
+                    "kind": "approval",
+                    "title": action.get("consequence") or action.get("description") or "",
+                    "content": action.get("consequence") or action.get("description") or "",
+                    "action": action.get("description") or "",
+                    "needs": _who_may_approve(payload.get("requirement")),
+                    "asked_by": str(payload.get("requester") or ""),
+                    "checks": payload.get("checks") or [],
+                    "context": {"workflow_id": workflow, "step_id": step_id, "action_id": action_id,
+                                "tenant": self.room.tenant},
+                })
+        return found
 
     def _asker(self, question: Dict[str, Any]) -> str:
         context = question.get("context") or {}
@@ -453,6 +523,16 @@ class RoomConversation:
                 f"{step}: {text[:600]}" for step, text in (context.get("upstream") or {}).items())
             need = f" ({context['capability']})" if context.get("capability") not in (None, "", "human") else ""
             note = "\n(The work so far used private access, so its details are not shown here.)" if private else ""
+            if str(question.get("id", "")).startswith(ACTION_QUESTION):
+                asker = self._person(question["asked_by"].split("/", 1)[-1]) if question.get("asked_by") else None
+                shown = question if not private else {
+                    "id": question["id"], "kind": "approval",
+                    "title": "an action from work that used private access (details shown to its asker)"}
+                posted = await self.surface.show_approval(
+                    thread, {**shown, "asked_by": asker.display if asker else ""})
+                self._remember("asked", question["id"], thread or posted)
+                self.store.mark_delivered(self.room.key, self.surface.key, key, posted or "")
+                continue
             if question.get("kind") == "approval" and not private:
                 detail = "\n".join(filter(None, [detail, str(context.get("evaluator_note") or "")]))
             asks = "sign-off" if question.get("kind") == "approval" else f"someone{need}"
@@ -604,11 +684,14 @@ class RoomConversation:
         """A button pressed by ``person`` (as the surface authenticated them).
 
         ACCEPT and SHOW_CHANGE take a proposal; RELEASE and DISCARD a proposal
-        held for that person; CONFIRM and CANCEL a prepared decision's id.
+        held for that person; CONFIRM and CANCEL a prepared decision's id;
+        APPROVE and DECLINE an action waiting for approval (the question's id).
         """
-        root = thread or self._threads.get(f"p:{target}")
+        root = thread or self._threads.get(f"p:{target}") or self._asked.get(target)
         try:
-            if action in (CONFIRM, CANCEL):
+            if action in (APPROVE, DECLINE):
+                await self._answer(person, target, "approved" if action == APPROVE else "rejected", "", root)
+            elif action in (CONFIRM, CANCEL):
                 await self._decide(person, action, target, root)
             elif action == ACCEPT:
                 await self.room.accept(target, by=person)
@@ -666,11 +749,39 @@ class RoomConversation:
         from jarviscore.human.channels import to_hitl_decision
 
         self.room.require(person, "editor", "answer for the team")
-        if question_id not in {q["id"] for q in self._questions()}:
+        waiting = {q["id"]: q for q in self._questions()}
+        if question_id not in waiting:
             raise RoomPermissionError("That question is not waiting on this room's work")
+        if question_id.startswith(ACTION_QUESTION):
+            await self._decide_action(person, waiting[question_id], to_hitl_decision(decision), response, root)
+            return
         if not self.agent.hitl.resolve(question_id, to_hitl_decision(decision), response, by=person.key):
             raise ValueError("That question is no longer waiting")
         await self.surface.say(root, f"{person.display} answered the agents ({decision}).")
+
+    async def _decide_action(self, person: Person, question: Dict[str, Any], decision: str,
+                             response: str, root: Optional[str]) -> None:
+        """Record ``person``'s decision on a waiting action, held to the deployment's approval
+        rules and scopes, then let its step go on. A decision policy does not accept is refused."""
+        from jarviscore.contracts.hitl import APPROVED_DECISIONS, normalize_hitl_decision
+        from jarviscore.control.approvals import ApprovalRefused, Approver
+        from jarviscore.kernel import approval
+
+        context = question["context"]
+        workflow, step, action_id = context["workflow_id"], context["step_id"], context["action_id"]
+        # The surface signed this person in; the room records them as such.
+        who = Approver(subject=person.key, assurance="asserted",
+                       authenticated_by=f"surface:{self.surface.key}")
+        store = self.room.redis_store
+        try:
+            await asyncio.to_thread(approval.record_decision, store, workflow, step, action_id, decision,
+                                    note=response, approver=who)
+        except ApprovalRefused as exc:
+            raise RoomPermissionError(str(exc).replace(person.key, person.display)) from None
+        store.resume_workflow_step(workflow, step)
+        approved = normalize_hitl_decision(decision) in APPROVED_DECISIONS
+        await self.surface.say(root, f"{person.display} {'approved' if approved else 'declined'}: "
+                                     f"{question.get('title')}")
 
     async def answer_now(self, person: Person, question_id: str, response: str,
                          root: Optional[str]) -> None:

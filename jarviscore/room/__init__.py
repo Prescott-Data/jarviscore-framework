@@ -4,8 +4,10 @@ from jarviscore.auth.people import Account, Identities, IdentityError, Person
 from jarviscore.room.agent import RoomAgent, RoomSubAgent, Turn
 from jarviscore.room.conversation import (
     ACCEPT,
+    APPROVE,
     CANCEL,
     CONFIRM,
+    DECLINE,
     DISCARD,
     RELEASE,
     SHOW_CHANGE,
@@ -29,8 +31,10 @@ from jarviscore.room.work import AskResult, RoomSource
 
 __all__ = [
     "ACCEPT",
+    "APPROVE",
     "CANCEL",
     "CONFIRM",
+    "DECLINE",
     "DISCARD",
     "RELEASE",
     "SHOW_CHANGE",

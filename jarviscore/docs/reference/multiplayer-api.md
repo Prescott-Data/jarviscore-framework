@@ -158,7 +158,7 @@ Nothing anyone adds is lost while work runs. More for running work (`update_work
 | `await conversation.press(person, action, target, thread)` | A button |
 | `conversation.recheck_audience()`, `conversation.can_see(person, item)` | Check who can see the surface before the next post; per-person visibility |
 
-`ChatSurface`: `key`, `say`, `notice`, `show_proposal`, `confirm`, `audience`, `history`. See [Chat Surfaces](../guides/chat-surfaces.md#what-a-surface-implements).
+`ChatSurface`: `key`, `say`, `notice`, `show_proposal`, `confirm`, `show_approval`, `audience`, `history`. See [Chat Surfaces](../guides/chat-surfaces.md#what-a-surface-implements).
 
 ## SlackApp
 

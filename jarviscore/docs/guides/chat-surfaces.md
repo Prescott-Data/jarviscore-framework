@@ -43,6 +43,7 @@ class MySurface(ChatSurface):
 
     # Optional:
     async def notice(self, thread, text, *, to) -> str: ...          # default: say(..., to=to)
+    async def show_approval(self, thread, question, *, to=None) -> str: ...  # default: say(...)
     async def audience(self, room) -> str | None: ...               # default: None (may show it)
     async def history(self, thread) -> list[dict]: ...              # default: []
 ```
@@ -52,13 +53,14 @@ class MySurface(ChatSurface):
 | `say` | post a line of the room's work, the agent's reply, or a question from the agents | posts `text` in `thread` (None for the top level), with `detail` as quoted context and `code` verbatim. With `to`, shows it to that person only, durably |
 | `show_proposal` | show a proposal | posts `text` and the `diff` with **Accept** and **Full change** buttons; when `held`, shown `to` the person it is held for, with **Release** and **Discard** |
 | `confirm` | ask one person to confirm a decision the agent prepared | shows `decision["summary"]` to `to` alone, with **Confirm** and **Cancel**, whose target is `decision["id"]` |
+| `show_approval` | show an action the work waits on someone to approve | posts `question["title"]` (what it does) and `question["action"]` (exactly what runs), with `question["needs"]` (who may approve) and **Approve** and **Decline**, whose target is `question["id"]` |
 | `notice` | tell one person something brief (a refusal, "Cancelled.") | may be transient, like a Slack message only they see |
 | `audience` | check, before posting, that everyone who can see this place may see the room | returns why not, or None |
 | `history` | give the agent the thread's earlier messages it never received | returns `{"person", "text"}` |
 
 Every posting method returns your id for what it posted. A thread is your id of the message a conversation hangs off: the first message of a piece of work becomes its thread.
 
-The button names are constants in `jarviscore.room`: `ACCEPT`, `SHOW_CHANGE`, `RELEASE`, `DISCARD`, `CONFIRM`, `CANCEL`. When someone presses one, call `press` with the person, the button and its target.
+The button names are constants in `jarviscore.room`: `ACCEPT`, `SHOW_CHANGE`, `RELEASE`, `DISCARD`, `CONFIRM`, `CANCEL`, `APPROVE`, `DECLINE`. When someone presses one, call `press` with the person, the button and its target.
 
 ## Driving the conversation
 
@@ -80,7 +82,7 @@ await conversation.press(person, action, target, thread_id)
 | `receive` | Records the message once, durably. Call it before you acknowledge the message: once it returns, the message is handled even if the process stops. A redelivery returns False |
 | `handle` | Handles a received message once, in order within its thread, across every process |
 | `hear` | `receive` and `handle` together |
-| `press` | Carries out a button for the person who pressed it, with their room role; a confirmation only for the person it was meant for, once, before it expires (10 minutes) |
+| `press` | Carries out a button for the person who pressed it, with their room role; a confirmation only for the person it was meant for, once, before it expires (10 minutes); an approval only from someone the [approval rules](hitl.md#who-may-approve) accept |
 | `start` | Picks up the saved threads, any message received but not handled, and work started before a restart |
 | `follow` | Posts each update, holding a lease so one process posts at a time; the place in the feed is saved only after each post succeeds, so a failure retries instead of skipping. An update is posted once, unless the process stops in the instant between the surface accepting it and it being recorded: then that one update is posted again |
 
