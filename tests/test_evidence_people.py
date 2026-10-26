@@ -63,6 +63,25 @@ def test_the_account_of_a_person_is_every_run_done_for_them_and_nothing_else(rec
     assert account(recorded, "acme/u_") == []  # a prefix is not a person; a tenant ends in "/"
 
 
+def test_an_action_refused_before_anyone_was_asked_is_in_the_persons_account(tmp_path):
+    root = str(tmp_path / "journal")
+    log = Journal(root)
+    log.append("wf-9/pay", "policy.preview", {
+        "host": "erp.example", "path": "/payments", "method": "POST", "acting_for": "acme/dave",
+        "outcome": "deny", "enforced": True, "rule": "pay-the-claimant-on-record",
+        "reason": "pay-the-claimant-on-record: request.json.iban is not claimant.iban"})
+    log.append("wf-9/pay", "policy.preview", {
+        "host": "erp.example", "path": "/payments", "method": "POST", "acting_for": "acme/dave",
+        "outcome": "allow", "enforced": True, "rule": "within-policy"})
+    log.close()
+
+    [run] = account(root, "acme/dave")
+    assert run["refused"] == 1 and run["effects"] == 0
+    [refused] = run["decisions"]
+    assert refused["previewed"] and refused["rule"] == "pay-the-claimant-on-record"
+    assert "iban is not claimant.iban" in refused["reason"]
+
+
 def test_the_account_of_a_tenant_covers_all_its_people_and_no_other_tenant(recorded):
     assert [r["run"] for r in account(recorded, "acme/")] == ["wf-1/a", "wf-2/a", "wf-4/a"]
     assert [r["run"] for r in account(recorded, "globex/")] == ["wf-3/a", "wf-4/a"]

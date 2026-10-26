@@ -87,6 +87,7 @@ def main() -> None:
                 "would refuse" if d["outcome"] == "deny" else "allowed")
             print(f"    {d['at']}  {state:<12} {d['sink']:<9} {d['action'] or '':<8} {d['target']}"
                   + (f"  [{d['rule']}]" if d["rule"] else "")
+                  + ("  (previewed: nobody was asked)" if d.get("previewed") else "")
                   + (f"  scopes: {', '.join(d['scopes'])}" if d.get("scopes") else ""))
             if d.get("reason") and d["outcome"] == "deny":
                 print(f"        {d['reason']}")

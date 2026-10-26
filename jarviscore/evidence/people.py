@@ -66,7 +66,15 @@ def _action(event: Dict[str, Any]) -> Dict[str, Any]:
         "outcome": data.get("outcome"), "rule": data.get("rule"), "enforced": data.get("enforced"),
         **({"reason": data["reason"]} if data.get("reason") else {}),
         **({"scopes": (data.get("scope") or {}).get("requirements") or []} if data.get("scope") else {}),
+        **({"previewed": True} if event.get("kind") == "policy.preview" else {}),
     }
+
+
+def _refused_in_preview(event: Dict[str, Any]) -> bool:
+    """An action policy refused when it was previewed, before anyone was asked to approve it:
+    nothing was done, and that is part of what happened for the person."""
+    data = event.get("data") or {}
+    return event.get("kind") == "policy.preview" and data.get("outcome") == "deny" and bool(data.get("enforced"))
 
 
 def account(root: str, who: str) -> List[Dict[str, Any]]:
@@ -86,7 +94,8 @@ def account(root: str, who: str) -> List[Dict[str, Any]]:
             continue
         start = next((e.get("data") or {} for e in events if e.get("kind") == "run.start"), {})
         end = next((e.get("data") or {} for e in reversed(events) if e.get("kind") == "run.end"), None)
-        decisions = [_action(e) for e in events if e.get("kind") == "policy.decision"]
+        decisions = [_action(e) for e in events
+                     if e.get("kind") == "policy.decision" or _refused_in_preview(e)]
         found.append({
             "run": events[0].get("run"),
             "for": sorted(mine),
