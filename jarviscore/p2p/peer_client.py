@@ -401,6 +401,10 @@ class PeerClient:
                 visible[role] = kept
         return visible
 
+    @_agent_registry.setter
+    def _agent_registry(self, registry: Dict[str, List]) -> None:
+        self._registry = registry
+
     # ─────────────────────────────────────────────────────────────────
     # IDENTITY
     # ─────────────────────────────────────────────────────────────────
