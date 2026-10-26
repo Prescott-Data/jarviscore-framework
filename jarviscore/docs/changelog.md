@@ -38,6 +38,7 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 ### Fixed
 
 - **Action approvals in rooms.** An integration action that needs approval now appears in the room's thread with **Approve** and **Decline**, held to the approval rules and scopes. Before, the step waited with nothing to approve. Surfaces can override `ChatSurface.show_approval`; the default posts a message. See [Chat Surfaces](guides/chat-surfaces.md#what-a-surface-implements).
+- **Your own systems through Nexus.** A provider registered in Nexus with an `api_base_url` (an in-house claims or ERP system) can now be called on that host. Before, only hosts in the shipped catalogue were accepted, so its credential was refused everywhere.
 
 </div>
 

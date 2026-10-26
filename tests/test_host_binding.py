@@ -80,7 +80,20 @@ def test_a_bare_domain_on_the_connection_is_understood():
 def test_a_tenant_provider_without_a_recorded_domain_is_refused():
     with pytest.raises(HostNotAllowed) as exc:
         ensure_host_allowed("salesforce", "https://acme.my.salesforce.com/x")
-    assert "record it on the connection" in str(exc.value)
+    assert "record that on the connection" in str(exc.value)
+
+
+def test_your_own_system_is_called_on_the_base_url_registered_in_nexus():
+    entry = {"api_base_url": "https://claims.internal.acme.example"}
+    ensure_host_allowed("acme_claims", "https://claims.internal.acme.example/claims/CLM-1", entry)
+    with pytest.raises(HostNotAllowed):
+        ensure_host_allowed("acme_claims", "https://evil.example.com/claims", entry)
+
+
+def test_an_unregistered_system_is_told_to_register_its_base_url():
+    with pytest.raises(HostNotAllowed) as exc:
+        ensure_host_allowed("acme_claims", "https://claims.internal.acme.example/claims")
+    assert "api_base_url" in str(exc.value)
 
 
 @pytest.mark.asyncio

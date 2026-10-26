@@ -14,6 +14,8 @@ Two honest sources answer "which hosts belong to this provider":
   2. The connection itself, for providers whose host is the customer's own
      tenant (Salesforce instances, Odoo deployments). Nothing can be known about
      those in advance, but the domain is recorded when the connection is made.
+     Nexus also returns the provider's registered ``api_base_url`` with the
+     credential, which is how your own in-house systems are recognised.
 """
 from __future__ import annotations
 
@@ -27,7 +29,7 @@ _DATA = Path(__file__).parent / "_data" / "provider_hosts.json"
 
 # Fields that carry the customer's own base URL for tenant-hosted providers.
 _TENANT_URL_FIELDS = (
-    "instance_url", "odoo_url", "base_url", "domain", "site_url", "account_url",
+    "api_base_url", "instance_url", "odoo_url", "base_url", "domain", "site_url", "account_url",
 )
 
 
@@ -107,9 +109,9 @@ def ensure_host_allowed(
     if not patterns:
         raise HostNotAllowed(
             f"No API hosts are known for provider {provider!r}, so its credential "
-            f"cannot be sent anywhere safely. If this provider is hosted on your "
-            f"own domain, record it on the connection (for example instance_url) "
-            f"so calls to it can be recognised.",
+            f"cannot be sent anywhere safely. Register it in Nexus with its "
+            f"api_base_url, or, if it is hosted on your own domain, record that on "
+            f"the connection (for example instance_url) so calls to it can be recognised.",
             provider=provider, requested_host=host,
         )
     if any(_matches(host, pattern) for pattern in patterns):

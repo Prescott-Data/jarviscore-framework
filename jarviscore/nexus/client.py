@@ -40,6 +40,19 @@ from .strategy import apply_strategy
 logger = logging.getLogger(__name__)
 
 
+def with_base_url(config: Any, payload: Dict[str, Any]) -> Dict[str, Any]:
+    """The strategy's config with the API base URL Nexus registered for the connection.
+
+    It names the provider's own host (or the instance the person connected), so a
+    credential may be sent there: see ``jarviscore.nexus.hosts``.
+    """
+    merged = dict(config) if isinstance(config, dict) else {}
+    base = payload.get("api_base_url")
+    if isinstance(base, str) and base and "api_base_url" not in merged:
+        merged["api_base_url"] = base
+    return merged
+
+
 class NexusClient:
     """
     HTTP client for the Nexus Gateway.
@@ -293,7 +306,7 @@ class NexusClient:
         return DynamicStrategy(
             type=strategy.get("type") or token_data.get("type") or "oauth2",
             credentials=token_data.get("credentials", {}),
-            config=strategy.get("config") or {},
+            config=with_base_url(strategy.get("config"), token_data),
             expires_at=token_data.get("expires_at"),
         )
 

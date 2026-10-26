@@ -30,7 +30,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 
-from jarviscore.nexus.client import NexusClient
+from jarviscore.nexus.client import NexusClient, with_base_url
 from jarviscore.nexus.lifecycle import LifecycleMonitor
 from jarviscore.nexus.models import DynamicStrategy
 from jarviscore.nexus.providers import get_scopes, get_provider
@@ -423,7 +423,7 @@ class AuthenticationManager:
         return DynamicStrategy(
             type=strategy.get("type") or "oauth2",
             credentials=credentials,
-            config=strategy.get("config") or {},
+            config=with_base_url(strategy.get("config"), payload),
             expires_at=payload.get("expires_at") or raw.get("expires_at"),
         )
 

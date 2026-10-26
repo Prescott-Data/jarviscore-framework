@@ -73,6 +73,10 @@ provider-specific flags. Run `jarviscore nexus register --help` and
 `jarviscore nexus register <provider> --help` for the installed CLI contract.
 See [Nexus Credentials](nexus.md) for local and gateway deployment.
 
+A credential is only ever sent to its provider's own hosts. For your own system
+(an in-house claims or ERP service), register it in Nexus with its
+`api_base_url`: its atoms may then call that host, and no other.
+
 ## Installed catalog
 
 <!-- GENERATED_ATOM_CATALOG -->
