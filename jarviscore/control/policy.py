@@ -57,7 +57,10 @@ class PolicyDenied(RuntimeError):
     """A call the deployment's policy refused before it reached the network."""
 
     def __init__(self, decision: "Decision"):
-        super().__init__(decision.reason)
+        # Said plainly, so an agent reporting it does not blame the provider, which never saw it.
+        rule = f" [{decision.rule}]" if decision.rule else ""
+        super().__init__(f"Your organisation's policy refused this call, so nothing was sent: "
+                         f"{decision.reason}{rule}")
         self.decision = decision
 
 
