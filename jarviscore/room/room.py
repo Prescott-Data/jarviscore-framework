@@ -428,6 +428,11 @@ class Room:
         names = self.redis_store.get_room_meta(self.key).get("names") or {}
         return names.get(person_id) or person_id
 
+    def names(self) -> Dict[str, str]:
+        """Person key (tenant/id) -> the name the room knows them by."""
+        names = self.redis_store.get_room_meta(self.key).get("names") or {}
+        return {f"{self.tenant}/{person_id}": name for person_id, name in names.items() if name}
+
     def role_of(self, person: Person) -> Optional[str]:
         """The person's role here, or None if they cannot see the room."""
         if person.tenant != self.tenant or not self.identities.is_active(person):

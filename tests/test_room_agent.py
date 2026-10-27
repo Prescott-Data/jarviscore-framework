@@ -805,6 +805,21 @@ def test_replies_reach_people_without_the_runtimes_receipt_ids():
                       ":step-1:3, :step-1:4). No approval or payment reference exists.") == (
         "Still vetted and not paid. No approval or payment reference exists.")
     assert for_people("Approved CLM-1041 for GBP 4,000.00, at 10:42.") == "Approved CLM-1041 for GBP 4,000.00, at 10:42."
+    # Cited without the "tool:" prefix (live):
+    assert for_people("CLM-1044 is not paid (receipt room-claims-desk-4cc868a17d:pay-claim-to-new-account:1). "
+                      "The notes name a new IBAN.") == "CLM-1044 is not paid. The notes name a new IBAN."
+    assert for_people("The receipt is in Claims Hub: PAY-31002.") == "The receipt is in Claims Hub: PAY-31002."
+
+
+def test_replies_name_people_as_the_room_knows_them():
+    """Live: 'refused because acme/erin does not hold the required claims.approve scope'."""
+    from jarviscore.room.agent import for_people
+
+    names = {"acme/erin": "Erin Walsh", "acme/dave": "Dave Mensah"}
+    assert for_people("Refused because acme/erin does not hold claims.approve; acme/dave's account read it.",
+                      names) == "Refused because Erin Walsh does not hold claims.approve; Dave Mensah's account read it."
+    # Only a whole key: not part of a path or a longer id.
+    assert for_people("Saved to files/acme/erin and acme/erin-old.", names) == "Saved to files/acme/erin and acme/erin-old."
 
 
 def test_finished_work_says_where_it_was_done():

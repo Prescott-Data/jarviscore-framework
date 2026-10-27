@@ -270,7 +270,7 @@ async def finish(room: Room, mesh, workflow_id: str, result: Dict[str, Any]) -> 
         from jarviscore.room.agent import for_people
 
         # People read it: without the runtime's receipt ids.
-        summary = for_people(str(result.get("result_summary") or result.get("error") or ""))
+        summary = for_people(str(result.get("result_summary") or result.get("error") or ""), room.names())
         room.note("ask.finished", **_who(asked_by), workflow_id=workflow_id,
                   status=result.get("status"), summary=summary,
                   proposal=proposal.id if proposal else "", held_for=held_for,

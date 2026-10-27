@@ -53,6 +53,8 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 - **Replay asks the model exactly what the run asked.** A replay now starts where the run's loop started (a resumed run from its checkpoint, after the approved action), offers the tools the run was offered, and keeps a gate's own model calls (the effect reviewer's) with the gate. Before, a run that waited for an approval, or ran with memory or a coder's integrations, replayed its decisions but asked the model differently, and a gate's model answer could be handed to the agent. In our live claims runs, model requests identical to the record went from none to all (14 of 14).
 - **The model no longer sees runtime plumbing.** `_nexus_connection_id`, `_nexus_provider`, `_resume` and `_new_execution_epoch` are left out of the agent's input context; code reads them as before.
 - **Clearer evidence output.** `jarviscore verify` says "(1 refused before approval)" rather than "(0 refused, 1 refused before approval)"; `jarviscore evidence` names the effect and integration of a call refused for a missing scope, and shows `agent=-` for room runs. A step paused for a person is logged as paused, not as an error.
+- **Rooms name people, not their keys.** Results and replies say "Erin Walsh does not hold claims.approve", not "acme/erin", and drop receipt ids cited without their `tool:` prefix.
+- **A missing model provider says what to set.** With none configured, a call fails with "No LLM provider is configured…" and the settings to add, instead of "All LLM providers failed. Last error: None".
 
 </div>
 

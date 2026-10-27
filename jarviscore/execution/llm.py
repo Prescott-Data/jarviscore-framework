@@ -815,6 +815,13 @@ class UnifiedLLMClient:
                         await permit.finish(failed=True)
                     raise
 
+        if not self.provider_order:
+            raise RuntimeError(
+                "No LLM provider is configured, so no model was called. Set one in the "
+                "environment or .env (AZURE_API_KEY with AZURE_ENDPOINT, CLAUDE_API_KEY, "
+                "GEMINI_API_KEY, or LLM_ENDPOINT for vLLM); `jarviscore check` "
+                "shows what is set."
+            )
         raise RuntimeError(
             f"All LLM providers failed. Last error: {last_error}\n"
             f"Tried: {[p.value for p in self.provider_order]}"
