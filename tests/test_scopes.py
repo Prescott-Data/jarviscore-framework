@@ -582,3 +582,12 @@ def test_grounding_matches_the_same_readings():
     for path in ("/payments", "//payments", "/./payments", "/%70ayments", "/payments;x=1"):
         assert rule.applies("erp", None, request_from("POST", f"{ERP}{path}", {})), path
     assert normalized_path("/a//b/./c/../d;m=1/%7Ee") == "/a/b/d/~e"
+
+
+def test_a_policy_refusal_names_the_system_that_never_saw_it():
+    from jarviscore.control.policy import Decision, PolicyDenied
+
+    decision = Decision(allowed=False, rule="over-scope-limit", reason="amount is beyond the limit", enforced=True)
+    message = str(PolicyDenied(decision, "claims_hub"))
+    assert message.startswith("Your organisation's policy refused this call, so nothing was sent")
+    assert "Claims Hub never received it" in message and "not Claims Hub, that refused" in message

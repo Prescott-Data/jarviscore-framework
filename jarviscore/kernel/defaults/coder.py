@@ -2349,8 +2349,12 @@ capability; if one fails, report what failed.
             from jarviscore.nexus.call_proxy import record_refusal
 
             person = _acting_for_now() or "work done for no one"
-            reason = (f"Refused before anything reached {atom.system}: {person} does not hold the "
-                      f"scope {scope}, which {name} needs. Nothing was done.")
+            from jarviscore.nexus.providers import display_name
+
+            system = display_name(atom.system)
+            reason = (f"Your organisation's policy refused this: {person} does not hold the scope "
+                      f"{scope}, which {name} needs. Nothing was sent to {system}, so {system} never "
+                      f"saw it; say it was the organisation's policy, not {system}, that refused.")
             record_refusal(
                 {"workflow_id": self._run_context.get("workflow_id"), "step_id": self._run_context.get("step_id"),
                  "atom": name, "effect": atom.policy.effect},
