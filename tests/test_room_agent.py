@@ -801,6 +801,10 @@ def test_replies_reach_people_without_the_runtimes_receipt_ids():
     assert for_people("Blocked (`tool_receipt_id`: tool:`room-claims-desk-b2713ce108`:`step-2-payout`:3). "
                       "The record lists `GB94BARC10201530093459`.") == (
         "Blocked. The record lists `GB94BARC10201530093459`.")
+    assert for_people("Still vetted and not paid (receipts: tool:room-claims-desk-26fae3dbf4:step-1:1, "
+                      ":step-1:3, :step-1:4). No approval or payment reference exists.") == (
+        "Still vetted and not paid. No approval or payment reference exists.")
+    assert for_people("Approved CLM-1041 for GBP 4,000.00, at 10:42.") == "Approved CLM-1041 for GBP 4,000.00, at 10:42."
 
 
 def test_finished_work_says_where_it_was_done():

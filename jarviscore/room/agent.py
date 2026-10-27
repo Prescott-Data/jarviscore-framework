@@ -478,7 +478,9 @@ class RoomKernel(Kernel):
 # A runtime receipt id ("tool:<workflow>:<step>:<n>"), possibly announced as one.
 _RECEIPT = re.compile(
     r"\s*[(\[]?\s*(?:`?(?:authoritative\s+)?(?:tool[\s_]+)?receipts?(?:[\s_]*ids?)?`?\s*[:=]?\s*)?"
-    r"`?tool`?:\s*`?[\w.-]+`?(?:\s*:\s*`?[\w.-]+`?)+[)\]]?",
+    r"`?tool`?:\s*`?[\w.-]+`?(?:\s*:\s*`?[\w.-]+`?)+"
+    # more of them, listed after the first and often shortened: ", :step-1:3, and :step-1:4"
+    r"(?:\s*,\s*(?:and\s+)?`?(?:tool`?:\s*`?[\w.-]+`?)?(?:\s*:\s*`?[\w.-]+`?)+)*[)\]]?",
     re.IGNORECASE,
 )
 
