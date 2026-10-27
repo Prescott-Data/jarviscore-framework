@@ -353,6 +353,13 @@ anyone may decline. The approver is checked again when the action is about to
 run, under the policy in force then: if it was tightened since, the action goes
 back to a person.
 
+**In a room**, an action the room's work waits on is posted in that work's
+thread with **Approve** and **Decline** (see [Chat Surfaces](chat-surfaces.md#what-a-surface-implements)).
+The person who presses is the one your surface signed in, recorded with
+`asserted` assurance; their scopes come from the policy's `scopes.grants`. The
+same rules apply: someone without the scope, or the person who asked under
+`distinct_from: [requester]`, is refused privately and the action keeps waiting.
+
 ### When a run stops while carrying an action out
 
 Starting an approved action is claimed once. If the run stops before its outcome

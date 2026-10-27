@@ -193,7 +193,7 @@ async def test_a_revision_starts_from_what_the_earlier_attempt_wrote(team):
     objective = coder.tasks[-1]["context"]["objective"]
     assert "The earlier attempt wrote src/app.py, test_app.py. Keep the work in the same files" in objective
     assert "--- src/app.py, as the earlier attempt wrote it ---\nVERSION = 'v2'" in objective
-    assert "Put new work in a new file" in objective
+    assert "put new work in a new file" in coder.tasks[-1]["context"]["work_method"]
 
 
 async def test_work_on_a_proposal_another_revision_replaced_files_nothing(team):
@@ -254,9 +254,10 @@ async def test_the_planner_is_told_the_room_files_the_proposal(team):
     asked = await room.ask("Fix the app and send it as a proposal", asked_by=alice, timeout=20,
                            plan_template=plan("Fix the app", ("fix", "coding", [])))
 
-    planned = room.redis_store.get_workflow_goal(asked.workflow_id)["goal"]
-    assert planned.startswith("Fix the app and send it as a proposal")
-    assert planned.endswith(ROOM_WORK_CONTRACT)
+    planned = room.redis_store.get_workflow_goal(asked.workflow_id)
+    assert planned["goal"] == "Fix the app and send it as a proposal", "the method is not something asked"
+    assert planned["context"]["work_method"] == ROOM_WORK_CONTRACT
+    assert room.mesh._planning_brief(planned["context"]) == ROOM_WORK_CONTRACT
     started = next(e for e in room.events() if e["type"] == "ask.started")
     assert started["goal"] == "Fix the app and send it as a proposal", "the room records what was asked"
 
@@ -414,6 +415,10 @@ async def test_the_room_agent_is_reached_by_people_not_routed_work(tmp_path, mon
         payload = P2PCoordinator._capability_payload(node)
         assert room_agent.agent_id not in payload["agents"]
         assert "room-conversation" not in payload["capabilities"]
+        # Nor can another agent ask it directly: it would never answer.
+        team = next(a for a in mesh.agents if a is not room_agent)
+        assert room_agent.agent_id not in {p["agent_id"] for p in team.peers.list_peers()}
+        assert team.peers.discover(capability="room-conversation") == []
     finally:
         await mesh.stop()
 
@@ -640,4 +645,228 @@ async def test_work_waits_for_a_person_and_goes_on_when_they_answer(tmp_path, mo
         await room.accept(asked.proposal.id, by=alice)
         assert (await room.read("plan.md")).decode() == "# Plan\n\nRewritten (yes, go ahead).\n"
     finally:
+        await mesh.stop()
+
+
+class Payer(CustomAgent):
+    """Pays out a claim, as an integration does: the payment waits for a person's approval."""
+    role = "payer"
+    capabilities = ["claims_payment"]
+    store = None
+    paid = []
+
+    async def execute_task(self, task):
+        from jarviscore.contracts.hitl import HITLAction
+        from jarviscore.control.approvals import ApprovalRequirement
+        from jarviscore.kernel import approval
+
+        context = task["context"]
+        workflow, step = context["workflow_id"], context["step_id"]
+        action = HITLAction(
+            action_id="pay-CLM-1", tool="claimshub_pay_claim", system="claimshub",
+            params={"claim_id": "CLM-1", "amount": "4000.00"},
+            description="claimshub_pay_claim(claim_id=CLM-1, amount=4000.00)",
+            consequence="Pays out claim CLM-1: GBP 4,000.00 to Ada Okafor.",
+        )
+        requirement = ApprovalRequirement(required=True, rule="deployment:claims", scopes=("claims.approve",),
+                                          distinct_from=("requester",), assurance="asserted")
+        waiting = approval.gate(Payer.store, workflow, step, action, requirement=requirement)
+        if waiting is not None:
+            return waiting
+        Payer.paid.append(acting_for.get())
+        result = {"status": "success", "output": "Paid CLM-1"}
+        approval.settle(Payer.store, workflow, step, action.action_id, result)
+        return result
+
+
+@pytest.fixture
+async def claims_room(tmp_path, monkeypatch):
+    """A room whose work pays a claim; Carol may approve payments, Erin and Dave may not."""
+    import json as _json
+
+    from jarviscore.control import policy as policy_module
+    from jarviscore.evidence import journal as journal_module
+
+    policy = tmp_path / "policy.json"
+    policy.write_text(_json.dumps({"scopes": {"grants": {"acme/carol": {"claims.approve": {"amount": "10000"}}}}}))
+    monkeypatch.setenv("JARVISCORE_CONTROL_POLICY", str(policy))
+    monkeypatch.setenv("JARVISCORE_JOURNAL_DIR", str(tmp_path / "journal"))
+    monkeypatch.setattr(policy_module, "_cached", None)
+    monkeypatch.setattr(journal_module, "_journal", None)
+    redis = RedisContextStore(client=fakeredis.FakeRedis(decode_responses=True))
+    monkeypatch.setattr(Mesh, "_init_redis", lambda self, settings: redis)
+    monkeypatch.setattr(Mesh, "_init_blob_storage",
+                        lambda self, settings: LocalBlobStorage(str(tmp_path / "blobs")))
+    monkeypatch.setattr(Mesh, "_init_nexus", lambda self: None)
+    monkeypatch.setattr(Mesh, "_init_athena", lambda self, settings: None)
+    monkeypatch.delenv("NEXUS_GATEWAY_URL", raising=False)
+    mesh = Mesh(config={"p2p_enabled": False, "distributed_poll_interval": 0.02,
+                        "hitl_inbox_dir": str(tmp_path / "hitl")})
+    mesh.add(Payer)
+    Payer.store, Payer.paid = redis, []
+    await mesh.start()
+    room = Room.for_mesh(mesh, "claims", tenant="acme")
+    carol, dave, erin = (Person("acme", n, n.title()) for n in ("carol", "dave", "erin"))
+    await room.ensure({"queue.md": "# Claims\n"}, by=carol)
+    for person in (dave, erin):
+        room.set_role(person, "editor", by=carol)
+    yield room, carol, dave, erin
+    await mesh.stop()
+
+
+async def test_an_action_the_rooms_work_waits_on_is_approved_in_the_room_by_who_may(claims_room):
+    from jarviscore.room import APPROVE, RoomConversation
+    from jarviscore.testing.rooms import MemorySurface, ScriptedRoomAgent
+
+    room, carol, dave, erin = claims_room
+    surface = MemorySurface()
+    conversation = RoomConversation(room, ScriptedRoomAgent(), surface, poll_interval=0.01)
+    await conversation.start()
+    following = asyncio.create_task(conversation.follow())
+    try:
+        asking = asyncio.create_task(room.ask(
+            "Pay out CLM-1", asked_by=dave, timeout=20, workflow_id="room-claims-pay-1",
+            plan_template=plan("Pay out CLM-1", ("pay", "claims_payment", []))))
+        for _ in range(500):
+            if surface.approvals:
+                break
+            await asyncio.sleep(0.02)
+        [shown] = surface.approvals
+        assert shown["title"] == "Pays out claim CLM-1: GBP 4,000.00 to Ada Okafor."
+        assert shown["action"] == "claimshub_pay_claim(claim_id=CLM-1, amount=4000.00)"
+        assert "claims.approve" in shown["needs"] and "not the person who asked" in shown["needs"]
+        assert shown["asked_by"] == "Dave"
+
+        await conversation.press(erin, APPROVE, shown["id"], None)
+        await conversation.press(dave, APPROVE, shown["id"], None)
+        refusals = [p.text for p in surface.posts if p.notice]
+        assert refusals[0] == "This action needs an approver who holds claims.approve; Erin does not."
+        assert refusals[1] == "Dave asked for this action and may not also approve it."
+        await asyncio.sleep(0.2)
+        assert Payer.paid == [] and not asking.done()
+
+        await conversation.press(carol, APPROVE, shown["id"], None)
+        asked = await asyncio.wait_for(asking, 20)
+        assert asked.status == "completed", asked.result
+        assert Payer.paid == ["acme/dave"], "paid once, for the person who asked"
+        assert any(p.text.startswith("Carol approved: Pays out claim CLM-1") for p in surface.posts)
+        record = room.redis_store.get_hitl_request("room-claims-pay-1", "pay", "pay-CLM-1")
+        assert (record["approver"], record["assurance"]) == ("acme/carol", "asserted")
+        assert record["authenticated_by"] == "surface:memory"
+    finally:
+        following.cancel()
+        await asyncio.gather(following, return_exceptions=True)
+
+
+async def test_a_declined_action_in_the_room_never_runs(claims_room):
+    from jarviscore.room import DECLINE, RoomConversation
+    from jarviscore.testing.rooms import MemorySurface, ScriptedRoomAgent
+
+    room, carol, dave, _ = claims_room
+    surface = MemorySurface()
+    conversation = RoomConversation(room, ScriptedRoomAgent(), surface, poll_interval=0.01)
+    await conversation.start()
+    following = asyncio.create_task(conversation.follow())
+    try:
+        asking = asyncio.create_task(room.ask(
+            "Pay out CLM-1", asked_by=dave, timeout=20, workflow_id="room-claims-pay-2",
+            plan_template=plan("Pay out CLM-1", ("pay", "claims_payment", []))))
+        for _ in range(500):
+            if surface.approvals:
+                break
+            await asyncio.sleep(0.02)
+        await conversation.press(carol, DECLINE, surface.approvals[0]["id"], None)
+        await asyncio.wait_for(asking, 20)
+        assert Payer.paid == []
+        finished = next(e for e in room.events() if e.get("type") == "ask.finished")
+        assert "declined" in finished["summary"], "the room says why the work did not go ahead"
+        assert any(p.text.startswith("Carol declined") for p in surface.posts)
+        assert len(surface.approvals) == 1, "a decided action is not asked again"
+    finally:
+        following.cancel()
+        await asyncio.gather(following, return_exceptions=True)
+
+
+class Filer(CustomAgent):
+    """Files claims in ClaimsHub with the asking person's own account, once they have connected it."""
+    role = "filer"
+    capabilities = ["claims_filing"]
+    connected = set()
+    filed = []
+
+    async def execute_task(self, task):
+        import uuid as _uuid
+
+        person = acting_for.get()
+        if person not in Filer.connected:
+            return {"status": "yield", "result_id": _uuid.uuid4().hex,
+                    "error": "This task needs claimshub, which is not connected here.",
+                    "yield_metadata": {"yield_pending": True, "typed_outcome": "YIELD_AUTH_REQUIRED",
+                                       "hitl_type": "auth", "system": "claimshub"}}
+        Filer.filed.append(person)
+        return {"status": "success", "output": "Filed CLM-9"}
+
+
+async def test_work_needing_an_account_asks_its_person_to_connect_it_then_goes_on(tmp_path, monkeypatch):
+    from jarviscore.room import RoomConversation
+    from jarviscore.testing.rooms import MemorySurface, ScriptedRoomAgent
+
+    redis = RedisContextStore(client=fakeredis.FakeRedis(decode_responses=True))
+    monkeypatch.setattr(Mesh, "_init_redis", lambda self, settings: redis)
+    monkeypatch.setattr(Mesh, "_init_blob_storage",
+                        lambda self, settings: LocalBlobStorage(str(tmp_path / "blobs")))
+    monkeypatch.setattr(Mesh, "_init_nexus", lambda self: None)
+    monkeypatch.setattr(Mesh, "_init_athena", lambda self, settings: None)
+    monkeypatch.delenv("NEXUS_GATEWAY_URL", raising=False)
+    mesh = Mesh(config={"p2p_enabled": False, "distributed_poll_interval": 0.02,
+                        "hitl_inbox_dir": str(tmp_path / "hitl")})
+    mesh.add(Filer)
+    Filer.connected, Filer.filed = set(), []
+    asked_to_connect = []
+
+    async def connect(provider, *, on_behalf_of, return_url=None, provider_scopes=None):
+        asked_to_connect.append((provider, on_behalf_of, return_url))
+        return {"auth_url": f"https://nexus.example/consent?for={on_behalf_of}", "connection_id": "c1"}
+
+    async def connected(provider, *, on_behalf_of):
+        return on_behalf_of in Filer.connected
+
+    monkeypatch.setattr(mesh, "connect", connect)
+    monkeypatch.setattr(mesh, "connected", connected)
+    await mesh.start()
+    room = Room.for_mesh(mesh, "claims", tenant="acme")
+    erin = Person("acme", "erin", "Erin")
+    await room.ensure({"queue.md": "# Claims\n"}, by=alice)
+    room.set_role(erin, "editor", by=alice)
+    surface = MemorySurface()
+    surface.connect_return_url = "https://desk.example/connected"
+    conversation = RoomConversation(room, ScriptedRoomAgent(), surface, poll_interval=0.01)
+    conversation.connect_check_seconds = 0.05
+    await conversation.start()
+    following = asyncio.create_task(conversation.follow())
+    try:
+        asking = asyncio.create_task(room.ask(
+            "File CLM-9", asked_by=erin, timeout=20, workflow_id="room-claims-file-1",
+            plan_template=plan("File CLM-9", ("file", "claims_filing", []))))
+        for _ in range(500):
+            if surface.connects:
+                break
+            await asyncio.sleep(0.02)
+        [request] = surface.connects
+        assert request["to"] == "erin" and request["provider"] == "claimshub"
+        assert request["auth_url"] == "https://nexus.example/consent?for=acme/erin"
+        assert asked_to_connect == [("claimshub", "acme/erin", "https://desk.example/connected")]
+        assert not [p for p in surface.posts if "nexus.example" in p.detail and p.to != "erin"]
+        await asyncio.sleep(0.3)
+        assert Filer.filed == [] and not asking.done(), "nothing is done before she connects"
+
+        Filer.connected.add("acme/erin")
+        asked = await asyncio.wait_for(asking, 20)
+        assert asked.status == "completed", asked.result
+        assert Filer.filed == ["acme/erin"]
+        assert any(p.text == "Erin connected Claimshub; the work goes on." for p in surface.posts)
+        assert len(surface.connects) == 1, "asked once"
+    finally:
+        following.cancel()
+        await asyncio.gather(following, return_exceptions=True)
         await mesh.stop()

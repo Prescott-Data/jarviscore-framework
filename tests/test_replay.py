@@ -257,3 +257,160 @@ async def test_a_tool_offered_at_run_time_is_replayed_as_it_was_offered(journal)
     assert (tool.description, tool.declared_phase, tool.parameters) == (
         "An integration offered at run time.", "action", schema)
     assert report.requests_matched == report.model_calls
+
+
+class ReviewedLedgerAgent(LedgerAgent):
+    """A gate asks the model before each payment, as the effect reviewer does."""
+
+    async def _pre_execute_hook(self, tool_name, params, state):
+        if tool_name == "pay":
+            await self.llm_client.generate(messages=[{"role": "user", "content": "Review this payment."}])
+        return await super()._pre_execute_hook(tool_name, params, state)
+
+
+@pytest.mark.asyncio
+async def test_a_gate_s_own_model_call_is_not_handed_to_the_agent_on_replay(journal):
+    root = journal()
+    reviewed = [SCRIPT[0], SCRIPT[1], {"content": '{"allow": true}'}, SCRIPT[2]]
+    agent = ReviewedLedgerAgent(llm_client=ScriptedLLM(reviewed))
+    output = await agent.run(task="Pay invoice INV-7", context={"workflow_id": "wf", "step_id": "pay"})
+    assert output.status == "success" and agent.llm_client.calls == 4
+
+    report = await replay(root, "wf/pay")
+
+    assert report.reproduced, report.divergence
+    # The gate's call is played back with the gate; the agent gets only its own three answers.
+    assert report.model_calls == 3 and report.requests_matched == 3
+
+
+class _Sandbox:
+    def get_manifest(self):
+        return "- fetch() (function/callable)"
+
+
+class SandboxedLedgerAgent(LedgerAgent):
+    """Its prompt names what its sandbox offers, as the coder's does."""
+
+    def __init__(self, agent_id="ledger", llm_client=None, sandbox=None):
+        self.sandbox = sandbox
+        super().__init__(agent_id=agent_id, llm_client=llm_client)
+
+    def get_system_prompt(self) -> str:
+        manifest = self.sandbox.get_manifest() if self.sandbox else ""
+        return "You settle invoices." + (f"\n\n## SANDBOX ENVIRONMENT\n{manifest}" if manifest else "")
+
+
+@pytest.mark.asyncio
+async def test_the_sandbox_s_description_is_part_of_the_replayed_prompt(journal):
+    root = journal()
+    agent = SandboxedLedgerAgent(llm_client=ScriptedLLM(SCRIPT), sandbox=_Sandbox())
+    await agent.run(task="Pay invoice INV-7", context={"workflow_id": "wf", "step_id": "pay"})
+
+    report = await replay(root, "wf/pay")  # rebuilt with no sandbox, as every replay is
+
+    assert report.reproduced, report.divergence
+    assert report.requests_matched == report.model_calls == 3
+
+
+class Memory:
+    """Cross-session memory and checkpoints, as the Kernel attaches them."""
+
+    def __init__(self):
+        self.checkpoint = None
+
+    async def recall(self, query, limit=5):
+        return []
+
+    async def remember(self, text, kind=None, role=None):
+        return True
+
+    async def load_checkpoint(self):
+        return self.checkpoint
+
+    async def save_checkpoint(self, raw):
+        self.checkpoint = raw
+
+    async def log_turn(self, *args, **kwargs):
+        return None
+
+
+@pytest.mark.asyncio
+async def test_tools_offered_because_memory_was_attached_are_offered_on_replay(journal):
+    root = journal()
+    agent = LedgerAgent(llm_client=ScriptedLLM(SCRIPT))
+    await agent.run(task="Pay invoice INV-7", context={"workflow_id": "wf", "step_id": "pay"}, memory=Memory())
+
+    report = await replay(root, "wf/pay")  # no memory on replay
+
+    assert report.reproduced, report.divergence
+    assert report.requests_matched == report.model_calls == 3
+
+
+@pytest.mark.asyncio
+async def test_a_resumed_run_replays_from_its_checkpoint(journal):
+    root = journal()
+    memory = Memory()
+    context = {"workflow_id": "wf", "step_id": "pay"}
+    first = LedgerAgent(llm_client=ScriptedLLM(SCRIPT[:2] + [{"content": "", "tool_calls": []}] * 3))
+    await first.run(task="Pay invoice INV-7", context=context, max_turns=3, memory=memory)
+    assert memory.checkpoint
+    resumed = LedgerAgent(llm_client=ScriptedLLM([SCRIPT[2]]))
+    output = await resumed.run(task="Pay invoice INV-7", context={**context, "_resume": True}, memory=memory)
+    assert output.status == "success"
+
+    report = await replay(root, "wf/pay")  # the resumed run: the last one recorded
+
+    assert report.reproduced, report.divergence
+    # It asked the model with the conversation it resumed with, as recorded.
+    assert report.requests_matched == report.model_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_a_tool_the_runtime_added_is_offered_with_the_same_arguments_on_replay(journal):
+    root = journal()
+    agent = LedgerAgent(llm_client=ScriptedLLM(SCRIPT))
+
+    def read_mailbox(limit: int = 10):
+        return {"status": "success", "messages": []}
+
+    # As the Kernel adds it: no declared schema, so its arguments are read from its signature.
+    agent.register_tool("read_mailbox", read_mailbox, "Read unread notifications.")
+    await agent.run(task="Pay invoice INV-7", context={"workflow_id": "wf", "step_id": "pay"})
+
+    report = await replay(root, "wf/pay")
+
+    assert report.reproduced, report.divergence
+    assert report.requests_matched == report.model_calls == 3
+
+
+class SetUpLedgerAgent(LedgerAgent):
+    """Like the coder: its run looks at the host first, and offers and prompts from what it found."""
+
+    host = {"providers": 3}
+
+    async def run(self, task, context=None, **kwargs):
+        self._found = self.host["providers"]
+        self.register_tool("request_access", self._lookup, f"Connect one of {self._found} providers.")
+        return await super().run(task, context, **kwargs)
+
+    def get_system_prompt(self) -> str:
+        return f"You settle invoices. {getattr(self, '_found', 0)} providers are registered."
+
+    def _replay_facts(self):
+        return {"found": self._found}
+
+    def _restore_replay_facts(self, facts):
+        self._found = facts["found"]
+
+
+@pytest.mark.asyncio
+async def test_what_the_agent_s_setup_found_on_the_host_is_what_it_is_prompted_with_on_replay(journal, monkeypatch):
+    root = journal()
+    agent = SetUpLedgerAgent(llm_client=ScriptedLLM(SCRIPT))
+    await agent.run(task="Pay invoice INV-7", context={"workflow_id": "wf", "step_id": "pay"})
+    monkeypatch.setattr(SetUpLedgerAgent, "host", {"providers": 0})  # the replay's host has none
+
+    report = await replay(root, "wf/pay")
+
+    assert report.reproduced, report.divergence
+    assert report.requests_matched == report.model_calls == 3

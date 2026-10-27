@@ -197,8 +197,9 @@ Finish as soon as you have acted, or decided to stay quiet."""
                            "What a proposal changes, as a diff. Params: {\"proposal\": \"p-1a2b3c4d\"} "
                            "(default: the thread's proposal)", phase="thinking")
         self.register_tool("ask_agents", self._tool_ask_agents,
-                           "Ask the team's agents to do work on the room's files; their changes come "
-                           "back as a proposal in this thread. Params: {\"goal\": \"<the request, "
+                           "Ask the team's agents to do work, on the room's files or in the systems "
+                           "they work in; changes to files come back as a proposal in this thread. "
+                           "Params: {\"goal\": \"<the request, "
                            "complete enough to act on alone>\", \"title\": \"<a short name for the "
                            "work, up to 8 words>\"}", phase="action")
         self.register_tool("update_work", self._tool_update_work,
@@ -466,20 +467,36 @@ class RoomKernel(Kernel):
             agent_id=agent_id, llm_client=self.llm_client, room_agent=self._room_agent,
             redis_store=self.redis_store, blob_storage=self.blob_storage)
         self._attach_mesh_tools(subagent)
+        # The room's work goes through ask_agents, so it is done for the person who asked, in
+        # its thread, with its proposals and approvals there. Asking a peer directly would do
+        # it out of the room's sight, and hold the turn until the peer answered.
+        for name in getattr(self.peer_tool, "tool_names", ()):
+            subagent._tools.pop(name, None)
         return subagent
 
 
 # A runtime receipt id ("tool:<workflow>:<step>:<n>"), possibly announced as one.
 _RECEIPT = re.compile(
-    r"\s*[(\[]?\s*(?:(?:authoritative\s+)?(?:tool\s+)?receipts?\s*(?:id)?\s*[:=]?\s*)?"
-    r"tool:[\w.-]+(?:\s*:\s*[\w.-]+)+[)\]]?",
+    r"\s*[(\[]?\s*(?:`?(?:authoritative\s+)?(?:tool[\s_]+)?receipts?(?:[\s_]*ids?)?`?\s*[:=]?\s*)?"
+    r"`?tool`?:\s*`?[\w.-]+`?(?:\s*:\s*`?[\w.-]+`?)+"
+    # more of them, listed after the first and often shortened: ", :step-1:3, and :step-1:4"
+    r"(?:\s*,\s*(?:and\s+)?`?(?:tool`?:\s*`?[\w.-]+`?)?(?:\s*:\s*`?[\w.-]+`?)+)*[)\]]?",
+    re.IGNORECASE,
+)
+# The same id cited without its "tool:" prefix, when the text says it is a receipt.
+_NAMED_RECEIPT = re.compile(
+    r"\s*[(\[]?\s*`?(?:tool[\s_]+)?receipts?(?:[\s_]*ids?)?`?\s*[:=]?\s*`?[\w.-]+(?::[\w.-]+){1,}:\d+`?[)\]]?",
     re.IGNORECASE,
 )
 
 
-def for_people(text: str) -> str:
-    """A reply as people read it: without the runtime's receipt ids."""
-    cleaned = _RECEIPT.sub("", text)
+def for_people(text: str, names: Optional[Dict[str, str]] = None) -> str:
+    """A reply as people read it: without the runtime's receipt ids, and with people
+    named as the room knows them (``names``: person key -> name) rather than by key."""
+    cleaned = _NAMED_RECEIPT.sub("", _RECEIPT.sub("", text))
+    for key, name in sorted((names or {}).items(), key=lambda item: -len(item[0])):
+        if key and name and name != key:
+            cleaned = re.sub(rf"(?<![\w/]){re.escape(key)}(?![\w/-])", name, cleaned)
     cleaned = re.sub(r"[ \t]+([.,;:])", r"\1", cleaned)
     cleaned = re.sub(r"(?:[.;:,]\s*){2,}$", ".", cleaned.strip())
     return re.sub(r"[ \t]{2,}", " ", cleaned).strip()
@@ -572,7 +589,7 @@ class RoomAgent(AutoAgent):
         if turn.quiet:
             return
         if result.get("status") == "success":
-            answer = for_people(str(result.get("result_summary") or ""))
+            answer = for_people(str(result.get("result_summary") or ""), room.names())
             if answer:
                 turn.replies.append(answer)
         else:

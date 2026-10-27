@@ -47,6 +47,25 @@ OBLIGATION_KINDS = frozenset({
 _COMPLETED_REASONS = frozenset({"stop", "end_turn", "stop_sequence", "completed"})
 
 
+def _public_context(context: dict[str, Any]) -> dict[str, Any]:
+    """The context a planner is shown: no private keys, and whom the work is for in words.
+
+    A bare ``acting_for`` was read as something to resolve: plans gained steps to find
+    the person's account and check their authority, which nothing can supply and nothing
+    needs, since both are applied at every call made for them.
+    """
+    public = {key: value for key, value in context.items() if not str(key).startswith("_")}
+    public.pop("work_method", None)  # given as the planning brief
+    person = public.pop("acting_for", None)
+    if person:
+        public["done_for"] = (
+            f"{person}. Every step runs as this person: their own connected accounts and what "
+            "they may do apply by themselves at each call. No step finds, resolves or checks "
+            "their account, identity or authority."
+        )
+    return public
+
+
 class MeshPlanError(ValueError):
     """The proposed plan cannot faithfully and safely enter the shared ledger."""
 
@@ -914,9 +933,7 @@ id, kind, description, source_ref.
         context: dict[str, Any],
     ) -> str:
         catalog = self._render_capability_catalog()
-        public_context = {
-            key: value for key, value in context.items() if not str(key).startswith("_")
-        }
+        public_context = _public_context(context)
         return f"""Compile one goal into a complete peer-executable DAG.
 
 SOURCE GOAL (preserve exactly):
@@ -936,8 +953,9 @@ PUBLIC CONTEXT:
 Return one valid json object with `steps`. Each step has exactly:
 step_id, capability, effect, systems, task, success_criterion,
 expected_findings, depends_on, covers, dependency_policy.
-- capability must come from LIVE CAPABILITY CATALOG.
-- effect must be exactly one of: read, propose, write, notify, destructive, final_response.
+- capability must come from LIVE CAPABILITY CATALOG: its name, before the colon.
+- effect must be exactly one of: read, propose, write, notify, destructive, final_response,
+    and one the capability lists under effects.
 - systems lists every provider the step will call and must be authorized by the capability.
 - write, notify and destructive outcomes must name exactly one provider in systems.
 {AGENT_MEMORY_RULE}
@@ -985,9 +1003,7 @@ Do not assign peers, choose winners, execute work or add requirements."""
         audit: dict[str, Any],
         context: dict[str, Any],
     ) -> str:
-        public_context = {
-            key: value for key, value in context.items() if not str(key).startswith("_")
-        }
+        public_context = _public_context(context)
         return f"""Repair one rejected peer-executable DAG before publication.
 
 SOURCE GOAL (immutable):
@@ -1049,9 +1065,7 @@ Do not execute work or add requirements."""
         validation_error: str,
         context: dict[str, Any],
     ) -> str:
-        public_context = {
-            key: value for key, value in context.items() if not str(key).startswith("_")
-        }
+        public_context = _public_context(context)
         return f"""Repair one invalid peer-executable DAG before publication.
 
 SOURCE GOAL (immutable):
@@ -1127,7 +1141,7 @@ LIVE CAPABILITY CATALOG:
 {self._planning_brief_section()}
 
 PUBLIC CONTEXT:
-{json.dumps(context, ensure_ascii=False, default=str)}
+{json.dumps(_public_context(context), ensure_ascii=False, default=str)}
 
 {self._amendment_step_invariants(target_obligation_ids)}
 
@@ -1148,8 +1162,9 @@ expected_findings, depends_on, covers, dependency_policy.
     and an intermediate step does not relay artifacts.
 - a direct dependency supplies only its own declared artifact. New work that needs original evidence
     plus a transformed decision must depend directly on both producers.
-- capability must come from LIVE CAPABILITY CATALOG.
-- effect must be exactly one of: read, propose, write, notify, destructive, final_response.
+- capability must come from LIVE CAPABILITY CATALOG: its name, before the colon.
+- effect must be exactly one of: read, propose, write, notify, destructive, final_response,
+    and one the capability lists under effects.
 - systems lists every provider the step will call and must be authorized by the capability.
 - write, notify and destructive outcomes must name exactly one provider in systems.
 {AGENT_MEMORY_RULE}
@@ -1494,6 +1509,16 @@ or copy runtime fields."""
             " which is how those files change. Never require a `write` or a system to edit them."
         )
 
+    @staticmethod
+    def _principal_audit_rule(context: Optional[dict[str, Any]]) -> str:
+        if not (context or {}).get("acting_for"):
+            return ""
+        return (
+            " The work is done for one person, and every step runs as them: their own connected"
+            " accounts and what they may do apply by themselves at each call. Never require a"
+            " step to find, resolve or name that person's account, identity or authority."
+        )
+
     def _audit_prompt(self, plan: MeshPlan, context: Optional[dict[str, Any]] = None) -> str:
         source_blocks = self._source_blocks(plan.goal)
         return f"""Audit a proposed mesh DAG against its immutable source goal.
@@ -1518,7 +1543,7 @@ limit and evidence requirement in SOURCE GOAL exists in the obligation ledger
 and is covered by an executable DAG step. Keeping something for later sessions is
 covered by any step whose task establishes it: every agent has its own cross-session
 memory, so it needs no provider system, and a `propose` step with empty systems is
-correct for it.{self._workspace_audit_rule(context)} For every write, notify, or destructive
+correct for it.{self._workspace_audit_rule(context)}{self._principal_audit_rule(context)} For every write, notify, or destructive
 step, verify that information needed to perform the intended action is supplied by the
 source goal or a producer directly listed in `depends_on`. Runtime context contains direct
 dependency artifacts only. Transitive ancestry establishes ordering only and does not deliver

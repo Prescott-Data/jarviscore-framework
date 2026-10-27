@@ -1882,6 +1882,16 @@ capability; if one fails, report what failed.
     def _restore_subagent_state(self, state: KernelState) -> None:
         self._candidates = list(state.internal_variables.get("_coder_candidates") or [])
 
+    def _replay_facts(self) -> Dict[str, Any]:
+        return {
+            "atom_tools": list(getattr(self, "_atom_tools", None) or ()),
+            "out_of_reach": {name: list(value) for name, value in (getattr(self, "_out_of_reach", None) or {}).items()},
+        }
+
+    def _restore_replay_facts(self, facts: Dict[str, Any]) -> None:
+        self._atom_tools = list(facts.get("atom_tools") or ())
+        self._out_of_reach = {name: tuple(value) for name, value in (facts.get("out_of_reach") or {}).items()}
+
     # ─────────────────────────────────────────────────────────────
     # Run Override
     # ─────────────────────────────────────────────────────────────
@@ -2339,8 +2349,12 @@ capability; if one fails, report what failed.
             from jarviscore.nexus.call_proxy import record_refusal
 
             person = _acting_for_now() or "work done for no one"
-            reason = (f"Refused before anything reached {atom.system}: {person} does not hold the "
-                      f"scope {scope}, which {name} needs. Nothing was done.")
+            from jarviscore.nexus.providers import display_name
+
+            system = display_name(atom.system)
+            reason = (f"Your organisation's policy refused this: {person} does not hold the scope "
+                      f"{scope}, which {name} needs. Nothing was sent to {system}, so {system} never "
+                      f"saw it; say it was the organisation's policy, not {system}, that refused.")
             record_refusal(
                 {"workflow_id": self._run_context.get("workflow_id"), "step_id": self._run_context.get("step_id"),
                  "atom": name, "effect": atom.policy.effect},
@@ -2416,7 +2430,8 @@ capability; if one fails, report what failed.
                     return {
                         "status": "error",
                         "error": (
-                            f"{name} was not sent for approval: policy refuses it "
+                            f"Your organisation's policy refuses {name}, so nothing was sent to "
+                            f"{atom.system} and no one was asked to approve it "
                             f"({'; '.join(c['reason'] for c in refused)}). Only values on "
                             "record can be sent; if those are not what the task asks for, "
                             "report that instead."

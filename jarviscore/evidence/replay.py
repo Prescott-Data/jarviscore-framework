@@ -75,6 +75,66 @@ def comparable(value: Any) -> Any:
 
 #: The recorder of the run in progress in this task (concurrent runs never share one).
 CURRENT: contextvars.ContextVar[Optional["Recorder"]] = contextvars.ContextVar("jarviscore_recorder", default=None)
+#: On replay: where the recorded loop started (its state, lease and the tools it was offered).
+PLAYED_START: contextvars.ContextVar[Optional[Dict[str, Any]]] = contextvars.ContextVar(
+    "jarviscore_played_start", default=None)
+_USED = ("thinking_used", "action_used", "turns_used")
+
+
+def _environment_tools() -> frozenset:
+    """Tools offered only when the host has what they use (peers, memory, a program sandbox)."""
+    from jarviscore.kernel.subagent import _MEMORY_TOOLS, _PEER_TOOLS
+
+    return frozenset(_PEER_TOOLS) | frozenset(_MEMORY_TOOLS) | {"run_tool_program"}
+
+
+def loop_start(agent, state):
+    """The state the agent's loop starts from: kept when recording, restored when replaying.
+
+    A resumed run starts from its checkpoint and a run may start with what memory
+    restored; a replay has neither store, so it starts from what the record kept.
+    """
+    played = PLAYED_START.get()
+    if played is not None:
+        if played.get("state") is not None:
+            state = type(state).model_validate(played["state"])
+            agent._restore_subagent_state(state)
+        lease = getattr(getattr(agent, "_cognition", None), "lease", None)
+        for name, value in (played.get("lease_used") or {}).items():
+            if lease is not None and name in _USED:
+                setattr(lease, name, value)
+        if played.get("facts"):
+            agent._restore_replay_facts(played["facts"])
+        if played.get("tools") is not None:
+            # Offered as the run offered them: what the host's setup found is not here on replay.
+            from jarviscore.kernel.subagent import ToolDefinition
+
+            current = getattr(agent, "_tools", {}) or {}
+            agent._tools = {
+                name: ToolDefinition(name, getattr(current.get(name), "func", None) or _nothing,
+                                     spec.get("description") or "", spec.get("phase"), spec.get("parameters"))
+                for name, spec in played["tools"]
+            }
+        return state
+    recorder = CURRENT.get()
+    if recorder is not None:
+        def record():
+            lease = getattr(getattr(agent, "_cognition", None), "lease", None)
+            environment = _environment_tools()
+            facts = agent._replay_facts()
+            recorder.note("run.ready", {
+                "state": recorder.keep(state.model_dump(mode="json")),
+                "lease_used": {name: getattr(lease, name) for name in _USED if hasattr(lease, name)},
+                "offered": [name for name in getattr(agent, "_tools", {}) or {}
+                            if name in environment and agent._offers_tool(name, state.context)],
+                **({"facts": recorder.keep(facts)} if facts else {}),
+            })
+        recorder.safely(record)
+    return state
+
+
+async def _nothing(*args, **kwargs):
+    return None
 
 
 class Recorder:
@@ -89,6 +149,8 @@ class Recorder:
         self.phase = "loop"
         #: 0 for the agent's own decisions; deeper for tools a tool program called.
         self.depth = 0
+        #: Above 0 while a gate decides; model calls made there are the gate's, not the agent's.
+        self.gating = 0
 
     @classmethod
     def for_run(cls, context: Optional[Dict[str, Any]]) -> Optional["Recorder"]:
@@ -160,17 +222,20 @@ class Recorder:
                 "role": getattr(agent, "role", None),
                 "task": self.keep(task),
                 "context": self.keep({k: v for k, v in (context or {}).items() if not str(k).startswith("_")}),
-                "tools": sorted(getattr(agent, "_tools", {}) or {}),
+                # In the order they were offered: the order the model saw them in.
+                "tools": list(getattr(agent, "_tools", {}) or {}),
                 # How each tool was offered: a replay offers the ones it cannot rebuild the same way.
                 "tool_specs": self.keep({
                     name: {"description": getattr(tool, "description", ""), "phase": getattr(tool, "declared_phase", None),
-                           "parameters": getattr(tool, "parameters", None)}
+                           "parameters": _offered_parameters(tool)}
                     for name, tool in (getattr(agent, "_tools", {}) or {}).items()
                 }),
                 "max_turns": max_turns,
                 "model": str(model) if model else None,
                 "lease": {name: getattr(lease, name) for name in LEASE_FIELDS if hasattr(lease, name)} if lease else None,
                 "native": bool(callable(carries) and carries(model) is True),
+                # What the sandbox told the agent it offers: part of its prompt, rebuilt on replay.
+                **({"sandbox_manifest": self.keep(manifest)} if (manifest := _sandbox_manifest(agent)) else {}),
                 "version": getattr(jarviscore, "__version__", ""),
                 "policy": current_policy().digest,
             })
@@ -193,12 +258,43 @@ class _RecordingLLM:
         response = await self._jc_inner.generate(*args, **kwargs)
         recorder = CURRENT.get()
         if recorder is not None:
+            # Asked by a gate or inside a tool: a replay plays those back, so not the agent's own call.
+            within = "gate" if recorder.gating else "tool" if recorder.depth else None
             recorder.safely(lambda: recorder.note("model.call", {
                 "request": recorder.keep({"args": list(args), "kwargs": dict(kwargs)}),
                 "response": recorder.keep(response),
                 "model": kwargs.get("model") or (response.get("model") if isinstance(response, dict) else None),
+                **({"within": within} if within else {}),
             }))
         return response
+
+
+def _offered_parameters(tool) -> Optional[Dict[str, Any]]:
+    """The arguments schema the model was offered: declared, or read from the tool's signature."""
+    if getattr(tool, "parameters", None):
+        return tool.parameters
+    from jarviscore.kernel.subagent import _parameters_schema
+
+    func = getattr(tool, "func", None)
+    return _parameters_schema(func) if callable(func) else None
+
+
+def _sandbox_manifest(agent) -> Optional[str]:
+    sandbox = getattr(agent, "sandbox", None)
+    if sandbox is None or not callable(getattr(sandbox, "get_manifest", None)):
+        return None
+    manifest = sandbox.get_manifest()
+    return manifest if isinstance(manifest, str) and manifest else None
+
+
+class _RecordedSandbox:
+    """Stands in for the recorded run's sandbox on replay: it describes itself, and runs nothing."""
+
+    def __init__(self, manifest: str):
+        self._manifest = manifest
+
+    def get_manifest(self) -> str:
+        return self._manifest
 
 
 def install(agent) -> None:
@@ -210,12 +306,17 @@ def install(agent) -> None:
     hook, execute, carry = agent._pre_execute_hook, agent._execute_tool, agent._carry_out_decided_actions
 
     async def recorded_hook(name, params, state):
-        result = await hook(name, params, state)
         recorder = CURRENT.get()
-        if recorder is not None:
-            recorder.safely(lambda: recorder.note("hook.result", {
-                "tool": name, "params": recorder.keep(params), "result": recorder.keep(result), "depth": recorder.depth,
-            }))
+        if recorder is None:
+            return await hook(name, params, state)
+        recorder.gating += 1
+        try:
+            result = await hook(name, params, state)
+        finally:
+            recorder.gating -= 1
+        recorder.safely(lambda: recorder.note("hook.result", {
+            "tool": name, "params": recorder.keep(params), "result": recorder.keep(result), "depth": recorder.depth,
+        }))
         return result
 
     async def recorded_tool(name, params):
@@ -337,7 +438,8 @@ async def replay(root: str, run: str, factory: Optional[Callable[[str, Any], Any
         except KeyError:
             raise _Diverged(f"content {key[:12]} is not kept (JOURNAL_CAPTURE=full is needed to replay)") from None
 
-    calls = [e["data"] for e in window if e["kind"] == "model.call"]
+    # The agent's own model calls; a gate's or a tool's are played back with its result.
+    calls = [e["data"] for e in window if e["kind"] == "model.call" and not e["data"].get("within")]
     hooks = [e["data"] for e in window if e["kind"] == "hook.result" and not e["data"].get("depth")]
     # The agent's own decisions; calls a tool program made travel with the program's result.
     tools, inner, pending = [], {}, []
@@ -390,6 +492,11 @@ async def replay(root: str, run: str, factory: Optional[Callable[[str, Any], Any
             return content(calls[index]["response"])
 
     agent = factory(start.get("agent_id") or "replay", Player()) if factory else _build(cls, start, Player())
+    if start.get("sandbox_manifest") and hasattr(agent, "sandbox") and agent.sandbox is None:
+        try:
+            agent.sandbox = _RecordedSandbox(content(start["sandbox_manifest"]))
+        except _Diverged:
+            report.notes.append("the sandbox's description was not kept; the agent's prompt may differ")
 
     async def played_hook(tool, params, state):
         index = position["hook"]
@@ -441,11 +548,32 @@ async def replay(root: str, run: str, factory: Optional[Callable[[str, Any], Any
             spec = specs.get(tool) or {}
             agent.register_tool(tool, nothing, spec.get("description") or f"(recorded tool {tool})",
                                 phase=spec.get("phase"), parameters=spec.get("parameters"))
+    recorded_order = [tool for tool in start.get("tools") or () if tool in agent._tools]
+    agent._tools = {**{tool: agent._tools[tool] for tool in recorded_order}, **agent._tools}
+    ready = next((e["data"] for e in window if e["kind"] == "run.ready"), None)
+    played_start = None
+    if ready is not None:
+        try:
+            played_start = {"state": content(ready["state"]), "lease_used": ready.get("lease_used")}
+        except _Diverged:
+            played_start = {"state": None, "lease_used": ready.get("lease_used")}
+            report.notes.append("where the loop started was not kept; replayed from a fresh start")
+        if ready.get("facts"):
+            try:
+                played_start["facts"] = content(ready["facts"])
+            except _Diverged:
+                report.notes.append("what the agent's setup found was not kept; its prompt may differ")
+        if start.get("tools") is not None and specs:
+            played_start["tools"] = [(name, specs.get(name) or {}) for name in start["tools"]]
+        # Peers, memory and a program sandbox are not there on replay: offer what the run was offered.
+        offered, environment, offers = set(ready.get("offered") or ()), _environment_tools(), agent._offers_tool
+        agent._offers_tool = lambda name, context: name in offered if name in environment else offers(name, context)
     try:
         from jarviscore.auth.principal import act_for
         from jarviscore.control.effects import scope
 
         token, replaying = scope.set({"replay": True}), REPLAYING.set(True)
+        starting = PLAYED_START.set(played_start)
         try:
             # The same person the run worked for, with what they held and delegated.
             held = content(start["scopes"]) if start.get("scopes") else None
@@ -455,6 +583,7 @@ async def replay(root: str, run: str, factory: Optional[Callable[[str, Any], Any
                                          max_turns=start.get("max_turns") or 15, model=start.get("model"),
                                          cognition=_cognition(start, agent))
         finally:
+            PLAYED_START.reset(starting)
             REPLAYING.reset(replaying)
             scope.reset(token)
     except _Diverged as exc:

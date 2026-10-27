@@ -251,7 +251,7 @@ def _decide(provider: str, method: str, url: str, authority: Optional[Dict[str, 
             journal = None
     if not decision.allowed:
         if decision.enforced:
-            raise PolicyDenied(decision)
+            raise PolicyDenied(decision, call.provider)
         logger.info("[control] would refuse %s %s%s: %s", call.method, host, path, decision.reason)
     return call_id, run, journal, policy.mode == "strict"
 

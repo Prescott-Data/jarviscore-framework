@@ -52,6 +52,10 @@ class MemorySurface(ChatSurface):
         self.key = key
         self.posts: List[Posted] = []
         self.confirmations: List[Dict[str, Any]] = []
+        #: Actions shown for approval, as the conversation passed them.
+        self.approvals: List[Dict[str, Any]] = []
+        #: Requests to connect an account, with who each was shown to: [{"to", **request}].
+        self.connects: List[Dict[str, Any]] = []
         self.said: Dict[str, List[Dict[str, str]]] = {}
         self.audience_problem: Optional[str] = None
         #: Make the next N posts fail (to test delivery retries).
@@ -77,6 +81,16 @@ class MemorySurface(ChatSurface):
     async def show_proposal(self, thread, text, diff, proposal_id, *, to=None, held=False):
         return self._add(Posted(self._id(), thread, text, code=diff, proposal=proposal_id,
                                 to=to.id if to else "", held=held))
+
+    async def show_approval(self, thread, question, *, to=None):
+        self.approvals.append(question)
+        return self._add(Posted(self._id(), thread, f"Needs sign-off: {question.get('title')}",
+                                question.get("action", ""), to=to.id if to else ""))
+
+    async def show_connect(self, thread, request, *, to):
+        self.connects.append({"to": to.id, **request})
+        return self._add(Posted(self._id(), thread, request.get("title", ""),
+                                request.get("auth_url", ""), to=to.id))
 
     async def confirm(self, thread, decision, *, to):
         self.confirmations.append(decision)

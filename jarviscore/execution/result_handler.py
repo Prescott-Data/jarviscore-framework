@@ -174,6 +174,8 @@ class ResultHandler:
                 f"Result {result_id}: SUCCESS in {time_str} "
                 f"(repairs: {repairs}, cost: ${safe_cost:.4f})"
             )
+        elif status == "yield":
+            logger.info(f"Result {result_id}: paused - {error}")
         else:
             logger.error(
                 f"Result {result_id}: {result_status.value} - {error}"

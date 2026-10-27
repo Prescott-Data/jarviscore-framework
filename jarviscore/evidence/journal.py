@@ -248,10 +248,12 @@ class Verification:
 
     def summary(self) -> str:
         state = "intact" if self.ok else f"{len(self.problems)} problem(s)"
-        preview = f", {self.refused_in_preview} refused before approval" if self.refused_in_preview else ""
+        refusals = [f"{self.refused} refused"] if self.refused or not self.refused_in_preview else []
+        if self.refused_in_preview:
+            refusals.append(f"{self.refused_in_preview} refused before approval")
         return (
             f"{self.runs} run(s), {self.events} event(s), {self.effects} effect(s) "
-            f"({self.refused} refused{preview}): {state}"
+            f"({', '.join(refusals)}): {state}"
         )
 
 

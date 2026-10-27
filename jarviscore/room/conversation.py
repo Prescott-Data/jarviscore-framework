@@ -21,8 +21,13 @@ everything multiplayer about it, so a surface only moves messages:
   for its asker (it used their private access) is shown to them alone until
   they release it.
 - **Agents asking people.** When the room's work needs a person (a step
-  routed to people, or an agent asking for sign-off), it is asked in the
-  thread of that work, and the room's editors answer it there.
+  routed to people, an agent asking for sign-off, or a consequential action
+  waiting for approval), it is asked in the thread of that work, and the
+  room's editors answer it there. An approval is decided by the person the
+  surface signed in, held to the deployment's approval rules and scopes.
+- **Their own accounts.** When work needs a system the person it is for has
+  not connected, that person alone is asked to connect their own account
+  (through Nexus); once they have, the work goes on.
 
 Implement ``ChatSurface`` for your product and drive the conversation with
 ``receive``/``handle`` (or ``hear``) and ``press``.
@@ -52,6 +57,14 @@ DISCARD = "discard"
 #: Buttons on a prepared decision, for the person who must confirm it.
 CONFIRM = "confirm"
 CANCEL = "cancel"
+#: Buttons on a consequential action the room's work waits on, for the room's editors.
+APPROVE = "approve"
+DECLINE = "decline"
+
+#: Prefix of the id of a question that is an action waiting for approval.
+ACTION_QUESTION = "action:"
+#: Prefix of the id of a request for a person to connect an account the work needs.
+CONNECT_REQUEST = "connect:"
 
 #: Decisions the room agent may prepare for a person to confirm.
 DECISIONS = ("accept", "reject", "release", "discard", "answer")
@@ -90,6 +103,34 @@ class ChatSurface:
         whose value is ``decision["id"]``. ``decision["summary"]`` says what it will do."""
         raise NotImplementedError
 
+    async def show_approval(self, thread: Optional[str], question: Dict[str, Any],
+                            *, to: Optional[Person] = None) -> str:
+        """Post a consequential action the room's work waits on, with APPROVE and
+        DECLINE buttons whose value is ``question["id"]``.
+
+        ``question`` holds ``title`` (what it does, in the agent's words),
+        ``action`` (exactly what runs: the element and values, or the call and
+        its arguments), ``needs`` (who may approve, when policy says) and
+        ``asked_by``. By default, a message the team answers in the thread.
+        """
+        needs = f"\n{question['needs']}" if question.get("needs") else ""
+        return await self.say(thread, f"🙋 The agents need sign-off: {question.get('title')}",
+                              detail=f"{question.get('action') or ''}{needs}", to=to)
+
+    #: Where a person lands after connecting an account (your page), or None for Nexus's own.
+    connect_return_url: Optional[str] = None
+
+    async def show_connect(self, thread: Optional[str], request: Dict[str, Any], *, to: Person) -> str:
+        """Ask ``to``, and only them, to connect their own account that the work needs.
+
+        ``request`` holds ``provider`` (and its ``name``), ``title`` and ``auth_url``, where they consent
+        (empty when this deployment cannot connect accounts). The work goes on by
+        itself once they have connected. By default, a private message with the link.
+        """
+        link = f"\n{request['auth_url']}" if request.get("auth_url") else ""
+        return await self.say(thread, f"🔗 {request.get('title')}",
+                              detail=f"{request.get('detail') or ''}{link}", to=to)
+
     async def audience(self, room: Room) -> Optional[str]:
         """Why this surface may not show ``room`` now, or None if it may.
 
@@ -103,6 +144,28 @@ class ChatSurface:
         """Optional: earlier messages in a thread that never reached the room
         (such as people talking among themselves), as {"person", "text"}."""
         return []
+
+
+def _exact_action(action: Dict[str, Any]) -> str:
+    """Exactly what runs if it is approved: the call and every argument, else its description."""
+    params = action.get("params") if isinstance(action.get("params"), dict) else {}
+    if action.get("tool") and params:
+        return f"{action['tool']}({', '.join(f'{name}={value}' for name, value in params.items())})"
+    return str(action.get("description") or "")
+
+
+def _who_may_approve(requirement: Any) -> str:
+    """Who policy accepts as the approver of an action, in words (empty when anyone may)."""
+    if not isinstance(requirement, dict):
+        return ""
+    parts = []
+    if requirement.get("roles"):
+        parts.append("a " + " or ".join(requirement["roles"]))
+    if requirement.get("scopes"):
+        parts.append("someone who holds " + " and ".join(requirement["scopes"]))
+    if "requester" in (requirement.get("distinct_from") or []):
+        parts.append("not the person who asked")
+    return ("Needs " + ", ".join(parts) + ".") if parts else ""
 
 
 async def _cancellable(coro):
@@ -152,6 +215,7 @@ class RoomConversation:
         self._lease_seconds = max(10.0, poll_interval * 10)
         self._failures: Dict[str, int] = {}  # item -> failed posts in a row
         self._memory_task: Optional[asyncio.Task] = None
+        self._connect_checked: Dict[str, float] = {}  # request -> when its connection was last checked
 
     # ── Saved state ─────────────────────────────────────────────────────────
     #
@@ -298,6 +362,8 @@ class RoomConversation:
     #: Posts of one item that may fail in a row before it is skipped, so one
     #: update the surface refuses cannot hold back everything after it.
     max_post_failures = 5
+    #: How often to check whether a person asked to connect an account has done so.
+    connect_check_seconds = 3.0
 
     async def sync(self) -> None:
         """Post every room event and question since the last delivered one.
@@ -336,6 +402,7 @@ class RoomConversation:
                 self.store.mark_delivered(self.room.key, self.surface.key, key, posted or "")
             self._save_cursor(item.cursor)
         await self._post_questions()
+        await self._ask_to_connect()
 
     async def _once(self, key: str, part: str, post) -> str:
         """Post one part of an item once, even when the item is retried."""
@@ -417,16 +484,50 @@ class RoomConversation:
 
     def _questions(self) -> List[Dict[str, Any]]:
         """What the room's own work is waiting on people for: questions routed to
-        people, and agents asking for sign-off. Nothing from other rooms or tenants."""
-        hitl = getattr(self.agent, "hitl", None)
-        if hitl is None:
-            return []
+        people, agents asking for sign-off, and consequential actions waiting for
+        approval. Nothing from other rooms or tenants."""
         workflows = {e.get("workflow_id") for e in self.room.events()
                      if e.get("type") == "ask.started" and e.get("workflow_id")}
-        return [q for q in hitl.inbox(tenant=self.room.tenant)
-                if q.get("kind") in ("input_request", "approval")
-                and ((q.get("context") or {}).get("mesh_workflow_id")
-                     or (q.get("context") or {}).get("workflow_id")) in workflows]
+        questions: List[Dict[str, Any]] = []
+        hitl = getattr(self.agent, "hitl", None)
+        if hitl is not None:
+            questions = [q for q in hitl.inbox(tenant=self.room.tenant)
+                         if q.get("kind") in ("input_request", "approval")
+                         and ((q.get("context") or {}).get("mesh_workflow_id")
+                              or (q.get("context") or {}).get("workflow_id")) in workflows]
+        return questions + self._waiting_actions(workflows)
+
+    def _waiting_actions(self, workflows) -> List[Dict[str, Any]]:
+        """Consequential actions the room's running work waits on a person to approve."""
+        from jarviscore.room.work import _ended
+
+        store = getattr(self.room, "redis_store", None)
+        if store is None or not hasattr(store, "hitl_action_index"):
+            return []
+        found = []
+        for workflow in sorted(w for w in workflows if w):
+            if _ended(self.room, workflow):
+                continue
+            for action_id, step_id in sorted(store.hitl_action_index(workflow).items()):
+                record = store.get_hitl_request(workflow, step_id, action_id) or {}
+                if record.get("status") != "pending" or not isinstance(record.get("action"), dict):
+                    continue
+                action, payload = record["action"], record.get("payload") or {}
+                if not isinstance(payload, dict):
+                    payload = {}
+                found.append({
+                    "id": f"{ACTION_QUESTION}{workflow}:{action_id}",
+                    "kind": "approval",
+                    "title": action.get("consequence") or action.get("description") or "",
+                    "content": action.get("consequence") or action.get("description") or "",
+                    "action": _exact_action(action),
+                    "needs": _who_may_approve(payload.get("requirement")),
+                    "asked_by": str(payload.get("requester") or ""),
+                    "checks": payload.get("checks") or [],
+                    "context": {"workflow_id": workflow, "step_id": step_id, "action_id": action_id,
+                                "tenant": self.room.tenant},
+                })
+        return found
 
     def _asker(self, question: Dict[str, Any]) -> str:
         context = question.get("context") or {}
@@ -453,6 +554,16 @@ class RoomConversation:
                 f"{step}: {text[:600]}" for step, text in (context.get("upstream") or {}).items())
             need = f" ({context['capability']})" if context.get("capability") not in (None, "", "human") else ""
             note = "\n(The work so far used private access, so its details are not shown here.)" if private else ""
+            if str(question.get("id", "")).startswith(ACTION_QUESTION):
+                asker = self._person(question["asked_by"].split("/", 1)[-1]) if question.get("asked_by") else None
+                shown = question if not private else {
+                    "id": question["id"], "kind": "approval",
+                    "title": "an action from work that used private access (details shown to its asker)"}
+                posted = await self.surface.show_approval(
+                    thread, {**shown, "asked_by": asker.display if asker else ""})
+                self._remember("asked", question["id"], thread or posted)
+                self.store.mark_delivered(self.room.key, self.surface.key, key, posted or "")
+                continue
             if question.get("kind") == "approval" and not private:
                 detail = "\n".join(filter(None, [detail, str(context.get("evaluator_note") or "")]))
             asks = "sign-off" if question.get("kind") == "approval" else f"someone{need}"
@@ -460,6 +571,80 @@ class RoomConversation:
                 thread, f"🙋 The agents need {asks}: {question.get('title')}{note}", detail=detail)
             self._remember("asked", question["id"], thread or posted)
             self.store.mark_delivered(self.room.key, self.surface.key, key, posted or "")
+
+    def _waiting_connections(self) -> List[Dict[str, Any]]:
+        """Room work waiting for the person it is for to connect an account it needs."""
+        from jarviscore.room.work import unfinished
+
+        found = []
+        for started in unfinished(self.room):
+            workflow, person = started["workflow_id"], str(started.get("by") or "")
+            for step in sorted(self.store.get_all_step_ids(workflow)):
+                if self.store.get_step_status(workflow, step) != "waiting":
+                    continue
+                output = (self.store.get_step_output(workflow, step) or {}).get("output")
+                waiting = (output or {}).get("yield_metadata") if isinstance(output, dict) else None
+                if not isinstance(waiting, dict) or waiting.get("typed_outcome") != "YIELD_AUTH_REQUIRED":
+                    continue
+                provider = str(waiting.get("system") or "")
+                if provider and person:
+                    found.append({
+                        # One request per time the step waited: a step that waits again asks again.
+                        "id": f"{CONNECT_REQUEST}{workflow}:{step}:{output.get('result_id') or ''}",
+                        "provider": provider, "person": person,
+                        "context": {"workflow_id": workflow, "step_id": step},
+                    })
+        return found
+
+    async def _ask_to_connect(self) -> None:
+        """Ask each person whose work waits on an account of theirs to connect it, and let
+        the work go on once they have."""
+        from jarviscore.nexus.providers import display_name
+
+        mesh = getattr(self.room, "mesh", None)
+        for request in self._waiting_connections():
+            key, person = f"question:{request['id']}", self._person(request["person"])
+            context, provider = request["context"], request["provider"]
+            name = display_name(provider)
+            thread = self._threads.get(f"wf:{context['workflow_id']}")
+            if self.store.delivered(self.room.key, self.surface.key, key) is None:
+                auth_url = ""
+                if mesh is not None:
+                    try:
+                        started = await mesh.connect(provider, on_behalf_of=person.key,
+                                                     return_url=self.surface.connect_return_url)
+                        auth_url = started.get("auth_url") or ""
+                    except Exception as exc:  # noqa: BLE001 - asked without a link, and logged
+                        logger.warning("Room %s: could not start connecting %s for %s: %s",
+                                       self.room.key, provider, person.key, exc)
+                detail = (f"The agents work with your own {name} account, and only for what you "
+                          "ask. Connect it once; this work goes on by itself."
+                          if auth_url else
+                          f"This deployment cannot connect {name} accounts; ask whoever runs it.")
+                posted = await self.surface.show_connect(thread, {
+                    "id": request["id"], "provider": provider, "name": name, "auth_url": auth_url,
+                    "detail": detail, "title": f"Connect your {name} account to go on with this work",
+                }, to=person)
+                self.store.mark_delivered(self.room.key, self.surface.key, key, posted or "")
+                self._connect_checked[request["id"]] = time.monotonic()
+                continue
+            if (mesh is None or time.monotonic() - self._connect_checked.get(request["id"], 0)
+                    < self.connect_check_seconds):
+                continue
+            self._connect_checked[request["id"]] = time.monotonic()
+            try:
+                ready = await mesh.connected(provider, on_behalf_of=person.key)
+            except Exception as exc:  # noqa: BLE001 - checked again on the next sync
+                logger.debug("Room %s: connection check failed: %s", self.room.key, exc)
+                continue
+            if not ready:
+                continue
+            try:
+                self.store.resume_workflow_step(context["workflow_id"], context["step_id"])
+            except (KeyError, ValueError):
+                continue  # it went on already
+            self._connect_checked.pop(request["id"], None)
+            await self.surface.say(thread, f"{person.display} connected {name}; the work goes on.")
 
     # ── People → room ───────────────────────────────────────────────────────
 
@@ -604,11 +789,14 @@ class RoomConversation:
         """A button pressed by ``person`` (as the surface authenticated them).
 
         ACCEPT and SHOW_CHANGE take a proposal; RELEASE and DISCARD a proposal
-        held for that person; CONFIRM and CANCEL a prepared decision's id.
+        held for that person; CONFIRM and CANCEL a prepared decision's id;
+        APPROVE and DECLINE an action waiting for approval (the question's id).
         """
-        root = thread or self._threads.get(f"p:{target}")
+        root = thread or self._threads.get(f"p:{target}") or self._asked.get(target)
         try:
-            if action in (CONFIRM, CANCEL):
+            if action in (APPROVE, DECLINE):
+                await self._answer(person, target, "approved" if action == APPROVE else "rejected", "", root)
+            elif action in (CONFIRM, CANCEL):
                 await self._decide(person, action, target, root)
             elif action == ACCEPT:
                 await self.room.accept(target, by=person)
@@ -666,11 +854,41 @@ class RoomConversation:
         from jarviscore.human.channels import to_hitl_decision
 
         self.room.require(person, "editor", "answer for the team")
-        if question_id not in {q["id"] for q in self._questions()}:
+        waiting = {q["id"]: q for q in self._questions()}
+        if question_id not in waiting:
             raise RoomPermissionError("That question is not waiting on this room's work")
+        if question_id.startswith(ACTION_QUESTION):
+            await self._decide_action(person, waiting[question_id], to_hitl_decision(decision), response, root)
+            return
         if not self.agent.hitl.resolve(question_id, to_hitl_decision(decision), response, by=person.key):
             raise ValueError("That question is no longer waiting")
         await self.surface.say(root, f"{person.display} answered the agents ({decision}).")
+
+    async def _decide_action(self, person: Person, question: Dict[str, Any], decision: str,
+                             response: str, root: Optional[str]) -> None:
+        """Record ``person``'s decision on a waiting action, held to the deployment's approval
+        rules and scopes, then let its step go on. A decision policy does not accept is refused."""
+        from jarviscore.contracts.hitl import APPROVED_DECISIONS, normalize_hitl_decision
+        from jarviscore.control.approvals import ApprovalRefused, Approver
+        from jarviscore.kernel import approval
+
+        context = question["context"]
+        workflow, step, action_id = context["workflow_id"], context["step_id"], context["action_id"]
+        # The surface signed this person in; the room records them as such.
+        who = Approver(subject=person.key, assurance="asserted",
+                       authenticated_by=f"surface:{self.surface.key}")
+        store = self.room.redis_store
+        try:
+            await asyncio.to_thread(approval.record_decision, store, workflow, step, action_id, decision,
+                                    note=response, approver=who)
+        except ApprovalRefused as exc:
+            raise RoomPermissionError(
+                str(exc).replace(repr(person.key), person.display).replace(person.key, person.display)
+            ) from None
+        store.resume_workflow_step(workflow, step)
+        approved = normalize_hitl_decision(decision) in APPROVED_DECISIONS
+        await self.surface.say(root, f"{person.display} {'approved' if approved else 'declined'}: "
+                                     f"{question.get('title')}")
 
     async def answer_now(self, person: Person, question_id: str, response: str,
                          root: Optional[str]) -> None:

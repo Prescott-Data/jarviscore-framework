@@ -80,13 +80,14 @@ def main() -> None:
         sys.exit(2)
     for run in runs:
         flags = " (also acted for others)" if run["shared"] else ""
-        print(f"{run['started']}  {run['run']}  agent={run['agent']}  for={', '.join(run['for'])}"
+        print(f"{run['started']}  {run['run']}  agent={run['agent'] or '-'}  for={', '.join(run['for'])}"
               f"  outcome={run['outcome'] or '-'}{flags}")
         for d in run["decisions"]:
             state = "refused" if d["outcome"] == "deny" and d["enforced"] else (
                 "would refuse" if d["outcome"] == "deny" else "allowed")
             print(f"    {d['at']}  {state:<12} {d['sink']:<9} {d['action'] or '':<8} {d['target']}"
                   + (f"  [{d['rule']}]" if d["rule"] else "")
+                  + ("  (previewed: nobody was asked)" if d.get("previewed") else "")
                   + (f"  scopes: {', '.join(d['scopes'])}" if d.get("scopes") else ""))
             if d.get("reason") and d["outcome"] == "deny":
                 print(f"        {d['reason']}")

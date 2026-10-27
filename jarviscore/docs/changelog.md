@@ -33,6 +33,39 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 
 <div class="changelog-release" markdown>
 
+## 3.0.1 <span class="changelog-date">2026-10-27</span>
+
+<div class="changelog-meta" markdown>
+<a class="changelog-release-link" href="https://github.com/Prescott-Data/jarviscore-framework/releases/tag/v3.0.1" target="_blank" rel="noopener noreferrer">View release on GitHub →</a>
+</div>
+
+Needs Nexus 0.7.1 or later for your own systems (`api_base_url`); the bundled compose file uses it.
+
+### Fixed
+
+- **Room work plans in a third of the time.** The room's rules for taking work back are now a planning brief instead of part of the request, so they no longer become obligations every plan had to repair. The planner is told that work done for a person runs with their own accounts, so plans no longer add steps to find that account, and the plan audit no longer rejects them for it. In our live runs a one-step request in a room went from 30–160 s of planning (5–8 model calls) to about 10 s (3 calls).
+
+- **Action approvals in rooms.** An integration action that needs approval now appears in the room's thread with **Approve** and **Decline**, held to the approval rules and scopes. Before, the step waited with nothing to approve. Surfaces can override `ChatSurface.show_approval`; the default posts a message. See [Chat Surfaces](guides/chat-surfaces.md#what-a-surface-implements).
+- **Rooms ask for a missing account.** When room work needs a system the person who asked has not connected, that person is asked privately to connect it (`ChatSurface.show_connect`, a Nexus consent link), and the work goes on once they have. Before, the step waited with no one told.
+- **Room work in connected systems.** Asking a room's agents to act in a system (approve a claim, send a message) no longer has to produce a file to be planned.
+- **A person's evidence includes what was refused before anyone was asked.** `jarviscore evidence` and `people.account` now list an action the policy refused when it was previewed (a payment to an account not on record, say), marked as previewed, and count it as refused.
+- **A room says where finished work was done.** Work done in a connected system reads "the agents finished (completed) in Claims Hub", not "with no changes to the files"; the `ask.finished` event lists its `systems`.
+- **A policy refusal says it was the policy.** `PolicyDenied` and a missing-scope refusal now read "Your organisation's policy refused this call, so nothing was sent: …" and name the system that never received it, so agents stop reporting a refusal as the provider's.
+- **Work results reach people without runtime receipt ids**, including ones written in Markdown.
+- **A room says why work did not finish.** The result of failed work now carries its reason (still shown only to its asker when it used their private access).
+- **No agent waits on a room's agent.** Other agents could ask a room's agent directly (`ask_capability`); it never answers peer requests, so the asker waited out the whole timeout (5 minutes). It is no longer offered as a peer, as it already was not for planning.
+- **The room agent starts work only in the room.** It no longer has the peer tools (`ask_peer`, `ask_capability`), which did work out of the room's sight and held the turn until the peer answered.
+- **Your own systems through Nexus.** A provider registered in Nexus with an `api_base_url` (an in-house claims or ERP system) can now be called on that host. Before, only hosts in the shipped catalogue were accepted, so its credential was refused everywhere.
+- **Replay asks the model exactly what the run asked.** A replay now starts where the run's loop started (a resumed run from its checkpoint, after the approved action), offers the tools the run was offered, and keeps a gate's own model calls (the effect reviewer's) with the gate. Before, a run that waited for an approval, or ran with memory or a coder's integrations, replayed its decisions but asked the model differently, and a gate's model answer could be handed to the agent. In our live claims runs, model requests identical to the record went from none to all (14 of 14).
+- **The model no longer sees runtime plumbing.** `_nexus_connection_id`, `_nexus_provider`, `_resume` and `_new_execution_epoch` are left out of the agent's input context; code reads them as before.
+- **Clearer evidence output.** `jarviscore verify` says "(1 refused before approval)" rather than "(0 refused, 1 refused before approval)"; `jarviscore evidence` names the effect and integration of a call refused for a missing scope, and shows `agent=-` for room runs. A step paused for a person is logged as paused, not as an error.
+- **Rooms name people, not their keys.** Results and replies say "Erin Walsh does not hold claims.approve", not "acme/erin", and drop receipt ids cited without their `tool:` prefix.
+- **A missing model provider says what to set.** With none configured, a call fails with "No LLM provider is configured…" and the settings to add, instead of "All LLM providers failed. Last error: None".
+
+</div>
+
+<div class="changelog-release" markdown>
+
 ## 3.0.0 <span class="changelog-date">2026-10-26</span>
 
 ### Added

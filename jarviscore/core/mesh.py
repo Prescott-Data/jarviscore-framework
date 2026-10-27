@@ -1264,7 +1264,7 @@ class Mesh:
                             response_capability=self.config.get(
                                 "mesh_response_capability"
                             ),
-                            planning_brief=self.config.get("mesh_planning_brief"),
+                            planning_brief=self._planning_brief(source.get("context")),
                         )
                         # Planning is model use for the person the goal is for, too.
                         with act_for(self._acting_for(source), self._mandate(source), self._scopes(source)), spending_scope(self._redis_store), \
@@ -1309,6 +1309,14 @@ class Mesh:
             except Exception as exc:
                 self._logger.warning("[MeshPlanner] Planning attempt failed: %s", exc)
             await self._idle(interval, mark)
+
+    def _planning_brief(self, context: Any) -> str:
+        """The deployment's planning brief, and how this goal's source takes work back."""
+        method = (context or {}).get("work_method") if isinstance(context, dict) else None
+        return "\n\n".join(
+            str(part).strip() for part in (self.config.get("mesh_planning_brief"), method)
+            if part and str(part).strip()
+        )
 
     def _mesh_capability_catalog(self) -> Dict[str, Any]:
         catalog: Dict[str, Any] = {}
@@ -1513,8 +1521,8 @@ class Mesh:
                                 response_capability=self.config.get(
                                     "mesh_response_capability"
                                 ),
-                                planning_brief=self.config.get(
-                                    "mesh_planning_brief"
+                                planning_brief=self._planning_brief(
+                                    definition.get("context")
                                 ),
                             )
                             with workflow_budget_scope(
@@ -1872,7 +1880,7 @@ class Mesh:
                 self._planning_llm(),
                 capabilities=self._mesh_capability_catalog(),
                 response_capability=self.config.get("mesh_response_capability"),
-                planning_brief=self.config.get("mesh_planning_brief"),
+                planning_brief=self._planning_brief(definition.get("context")),
             )
             with workflow_budget_scope(
                 self._redis_store,

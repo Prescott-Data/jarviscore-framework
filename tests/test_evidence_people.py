@@ -63,6 +63,25 @@ def test_the_account_of_a_person_is_every_run_done_for_them_and_nothing_else(rec
     assert account(recorded, "acme/u_") == []  # a prefix is not a person; a tenant ends in "/"
 
 
+def test_an_action_refused_before_anyone_was_asked_is_in_the_persons_account(tmp_path):
+    root = str(tmp_path / "journal")
+    log = Journal(root)
+    log.append("wf-9/pay", "policy.preview", {
+        "host": "erp.example", "path": "/payments", "method": "POST", "acting_for": "acme/dave",
+        "outcome": "deny", "enforced": True, "rule": "pay-the-claimant-on-record",
+        "reason": "pay-the-claimant-on-record: request.json.iban is not claimant.iban"})
+    log.append("wf-9/pay", "policy.preview", {
+        "host": "erp.example", "path": "/payments", "method": "POST", "acting_for": "acme/dave",
+        "outcome": "allow", "enforced": True, "rule": "within-policy"})
+    log.close()
+
+    [run] = account(root, "acme/dave")
+    assert run["refused"] == 1 and run["effects"] == 0
+    [refused] = run["decisions"]
+    assert refused["previewed"] and refused["rule"] == "pay-the-claimant-on-record"
+    assert "iban is not claimant.iban" in refused["reason"]
+
+
 def test_the_account_of_a_tenant_covers_all_its_people_and_no_other_tenant(recorded):
     assert [r["run"] for r in account(recorded, "acme/")] == ["wf-1/a", "wf-2/a", "wf-4/a"]
     assert [r["run"] for r in account(recorded, "globex/")] == ["wf-3/a", "wf-4/a"]
@@ -224,3 +243,17 @@ def test_erasing_one_person_keeps_the_content_of_a_run_that_also_worked_for_anot
     remaining = {name for _, _, names in os.walk(os.path.join(root, "content")) for name in names}
     assert remaining == {f"{shared}.json", f"{theirs}.json"}
     assert verify(root).ok
+
+
+def test_a_call_refused_for_a_missing_scope_names_its_effect_and_integration(tmp_path):
+    log = Journal(str(tmp_path))
+    log.append("wf/approve", "policy.decision", {
+        "call_id": "c1", "acting_for": "acme/dave", "atom": "claims_hub_approve_claim", "effect": "write",
+        "provider": "claims_hub", "outcome": "deny", "enforced": True, "rule": "scope-missing",
+        "reason": "acme/dave does not hold the scope claims.approve",
+    })
+
+    [run] = account(str(tmp_path), "acme/dave")
+    [decision] = run["decisions"]
+
+    assert (decision["action"], decision["target"]) == ("write", "claims_hub_approve_claim")

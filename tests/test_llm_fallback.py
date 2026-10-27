@@ -1167,3 +1167,13 @@ def test_a_call_says_where_its_price_came_from(monkeypatch):
     assert (round(cost, 6), source) == (2.2, "declared")
     assert _llm_module._call_cost("gpt-4o", 1_000_000, 0)[1] == "builtin"
     assert _llm_module._call_cost("unpriced-model", 1_000_000, 0) == (3.0, "default")
+
+
+@pytest.mark.asyncio
+async def test_with_no_provider_configured_the_error_says_what_to_set():
+    llm = UnifiedLLMClient.__new__(UnifiedLLMClient)
+    llm.config, llm.provider_order = {}, []
+
+    with pytest.raises(RuntimeError, match="No LLM provider is configured") as raised:
+        await llm._generate_inner([{"role": "user", "content": "hi"}], 0.0, 100)
+    assert "AZURE_API_KEY" in str(raised.value) and "jarviscore check" in str(raised.value)

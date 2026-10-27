@@ -58,13 +58,16 @@ class AskResult:
     sources: List[Dict[str, str]] = None
 
 
-#: What the room does with the work, for the planner: proposing is the room's job,
-#: so a request that says "return it as a proposal" is not an extra step to plan.
+#: What the room does with the work, given to the planner as the goal's ``work_method``:
+#: proposing is the room's job, so a request that says "return it as a proposal" is not an
+#: extra step to plan. Work done in a connected system (approving a claim) writes no file.
 ROOM_WORK_CONTRACT = (
-    "This work is on the room's files. Put new work in a new file with a clear name, and "
-    "change an existing file only when the request is about that file. Every file written "
-    "in the room's folder is part of the change: the room files what changed as a proposal "
-    "for people to review, so no step needs to propose, present or deliver the changed files."
+    "This work is for the room. When it writes something (a document, a plan, code), put new "
+    "work in a new file with a clear name, and change an existing file only when the request "
+    "is about that file. Every file written in the room's folder is part of the change: the "
+    "room files what changed as a proposal for people to review, so no step needs to propose, "
+    "present or deliver the changed files. Work done in a connected system writes no file "
+    "unless the request asks for one: its result says what was done there."
 )
 
 #: How much of an earlier attempt a revision is shown, per file and in all.
@@ -166,7 +169,6 @@ async def ask(
         earlier = await _earlier_attempt(room, previous)
         if earlier:
             task = f"{task}\n\n{earlier}"
-    task = f"{task}\n\n{ROOM_WORK_CONTRACT}"
     room.note("ask.started", **_who(asked_by), goal=goal, workflow_id=workflow_id,
               version=head.version, revision_of=revision_of, title=title or short_title(goal),
               **({"follows": follows, "takes": list(takes or [])} if follows else {}))
@@ -187,6 +189,9 @@ async def ask(
                 "room_id": room.key,
                 # Steps use the asker's own accounts (jarviscore.auth.principal).
                 "acting_for": asked_by.key,
+                # How the room takes work back, for the planner: a method, not something asked
+                # for. In the goal, each sentence became an obligation that plans had to repair.
+                "work_method": ROOM_WORK_CONTRACT,
             },
             plan_template=plan_template,
             timeout=timeout,
@@ -261,10 +266,15 @@ async def finish(room: Room, mesh, workflow_id: str, result: Dict[str, Any]) -> 
                 held_for=held_for,
                 sources=sources,
             )
-        summary = str(result.get("result_summary") or "")
+        # Work that did not succeed says why: the result's summary, else the reason it stopped.
+        from jarviscore.room.agent import for_people
+
+        # People read it: without the runtime's receipt ids.
+        summary = for_people(str(result.get("result_summary") or result.get("error") or ""), room.names())
         room.note("ask.finished", **_who(asked_by), workflow_id=workflow_id,
                   status=result.get("status"), summary=summary,
-                  proposal=proposal.id if proposal else "", held_for=held_for)
+                  proposal=proposal.id if proposal else "", held_for=held_for,
+                  systems=sorted({str(s.get("provider")) for s in sources or () if s.get("provider")}))
         return AskResult(workflow_id, str(result.get("status")), proposal, summary, result,
                          held_for, sources)
     finally:

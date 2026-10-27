@@ -465,6 +465,7 @@ async def test_nobody_is_asked_to_approve_a_payment_policy_will_refuse(paying_co
 
     assert result["semantic_error"] == "POLICY_WOULD_REFUSE" and result["performed"] is False
     assert "iban is not supplier.iban" in result["error"]
+    assert "policy refuses erp_pay_invoice, so nothing was sent to erp and no one was asked" in result["error"]
     assert coder.redis_store.list_hitl_action_requests("wf", "pay") == []
     assert not payments()
     check = verify(root)

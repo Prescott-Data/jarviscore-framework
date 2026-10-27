@@ -56,8 +56,17 @@ class PreviewHeld(RuntimeError):
 class PolicyDenied(RuntimeError):
     """A call the deployment's policy refused before it reached the network."""
 
-    def __init__(self, decision: "Decision"):
-        super().__init__(decision.reason)
+    def __init__(self, decision: "Decision", provider: str = ""):
+        # Said plainly, so an agent reporting it does not blame the provider, which never saw it.
+        rule = f" [{decision.rule}]" if decision.rule else ""
+        unseen = ""
+        if provider:
+            from jarviscore.nexus.providers import display_name
+
+            name = display_name(provider)
+            unseen = f" {name} never received it; say it was your organisation's policy, not {name}, that refused."
+        super().__init__(f"Your organisation's policy refused this call, so nothing was sent: "
+                         f"{decision.reason}{rule}.{unseen}")
         self.decision = decision
 
 

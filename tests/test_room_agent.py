@@ -174,6 +174,22 @@ class TestTheAgent:
         params = " ".join(t.description.split("Params:", 1)[-1] for t in tools.values())
         assert '"person"' not in params and '"by"' not in params, "who acts is never a parameter"
 
+    def test_it_starts_work_in_the_room_not_by_asking_a_peer_directly(self):
+        """Work asked of a peer directly is done out of the room's sight: no thread, no proposal,
+        no approval in the room. The room role starts work with ask_agents only."""
+        from types import SimpleNamespace
+
+        from jarviscore.room.agent import ROOM_ROLE, RoomKernel
+
+        kernel = RoomKernel(llm_client=None, room_agent=RoomAgent())
+        kernel.peer_tool = SimpleNamespace(
+            tool_names=["ask_peer", "ask_capability", "broadcast_update", "list_peers"],
+            schema=[{"name": n, "description": n, "parameters": {}} for n in
+                    ("ask_peer", "ask_capability", "broadcast_update", "list_peers")])
+        tools = kernel._create_subagent(ROOM_ROLE, "room-1")._tools
+        assert "ask_agents" in tools
+        assert not {"ask_peer", "ask_capability", "broadcast_update", "list_peers"} & set(tools)
+
     async def test_converse_needs_an_authenticated_person(self, room):
         with pytest.raises(TypeError, match="Person who spoke"):
             await RoomAgent().converse(room, "alice", "ship it")
@@ -781,3 +797,37 @@ def test_replies_reach_people_without_the_runtimes_receipt_ids():
     assert for_people("Done (receipt tool:wf-1:step-2:3). p-1a2b3c4d is in the thread.") == (
         "Done. p-1a2b3c4d is in the thread.")
     assert for_people("The receipts show nothing odd.") == "The receipts show nothing odd."
+    # As a result summary wrote it, in Markdown (live):
+    assert for_people("Blocked (`tool_receipt_id`: tool:`room-claims-desk-b2713ce108`:`step-2-payout`:3). "
+                      "The record lists `GB94BARC10201530093459`.") == (
+        "Blocked. The record lists `GB94BARC10201530093459`.")
+    assert for_people("Still vetted and not paid (receipts: tool:room-claims-desk-26fae3dbf4:step-1:1, "
+                      ":step-1:3, :step-1:4). No approval or payment reference exists.") == (
+        "Still vetted and not paid. No approval or payment reference exists.")
+    assert for_people("Approved CLM-1041 for GBP 4,000.00, at 10:42.") == "Approved CLM-1041 for GBP 4,000.00, at 10:42."
+    # Cited without the "tool:" prefix (live):
+    assert for_people("CLM-1044 is not paid (receipt room-claims-desk-4cc868a17d:pay-claim-to-new-account:1). "
+                      "The notes name a new IBAN.") == "CLM-1044 is not paid. The notes name a new IBAN."
+    assert for_people("The receipt is in Claims Hub: PAY-31002.") == "The receipt is in Claims Hub: PAY-31002."
+
+
+def test_replies_name_people_as_the_room_knows_them():
+    """Live: 'refused because acme/erin does not hold the required claims.approve scope'."""
+    from jarviscore.room.agent import for_people
+
+    names = {"acme/erin": "Erin Walsh", "acme/dave": "Dave Mensah"}
+    assert for_people("Refused because acme/erin does not hold claims.approve; acme/dave's account read it.",
+                      names) == "Refused because Erin Walsh does not hold claims.approve; Dave Mensah's account read it."
+    # Only a whole key: not part of a path or a longer id.
+    assert for_people("Saved to files/acme/erin and acme/erin-old.", names) == "Saved to files/acme/erin and acme/erin-old."
+
+
+def test_finished_work_says_where_it_was_done():
+    from jarviscore.room.feed import describe
+
+    assert describe({"type": "ask.finished", "status": "completed", "systems": ["claims_hub"]}) == \
+        "the agents finished (completed) in Claims Hub"
+    assert describe({"type": "ask.finished", "status": "completed", "proposal": "p-1"}) == \
+        "the agents finished (completed) → p-1 to review"
+    assert describe({"type": "ask.finished", "status": "completed"}) == \
+        "the agents finished (completed) with no changes to the files"

@@ -93,7 +93,7 @@ class PeerClient:
         self._coordinator = coordinator
         self._agent_id = agent_id
         self._agent_role = agent_role
-        self._agent_registry = agent_registry
+        self._registry = agent_registry
         self._node_id = node_id
         self._redis_store = redis_store
 
@@ -387,6 +387,23 @@ class PeerClient:
                         status="alive"
                     )
         return result
+
+    @property
+    def _agent_registry(self) -> Dict[str, List]:
+        """Local agents, by role, that other agents may ask. An agent people talk to
+        (``mesh_worker = False``, like a room's) takes no work from other agents: asked,
+        it would never answer, and the asker would wait out its whole timeout."""
+        visible = {}
+        for role, agents in self._registry.items():
+            kept = [a for a in agents
+                    if getattr(a, "mesh_worker", True) or a.agent_id == self._agent_id]
+            if kept:
+                visible[role] = kept
+        return visible
+
+    @_agent_registry.setter
+    def _agent_registry(self, registry: Dict[str, List]) -> None:
+        self._registry = registry
 
     # ─────────────────────────────────────────────────────────────────
     # IDENTITY

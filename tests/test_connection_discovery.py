@@ -78,6 +78,15 @@ def test_gateway_bookkeeping_is_not_mistaken_for_credentials():
     assert strategy.expires_at == "2099-01-01T00:00:00Z"
 
 
+def test_the_base_url_nexus_registered_comes_with_the_strategy():
+    """Nexus returns the provider's api_base_url with the credential: it names the host it may go to."""
+    payload = {**PAYLOAD, "api_base_url": "https://claims.internal.acme.example"}
+    assert AuthenticationManager._strategy_from_resolve(payload).config == {
+        "api_base_url": "https://claims.internal.acme.example"}
+    pinned = {**payload, "strategy": {"type": "header", "config": {"api_base_url": "https://pinned.example"}}}
+    assert AuthenticationManager._strategy_from_resolve(pinned).config["api_base_url"] == "https://pinned.example"
+
+
 async def test_discovery_clears_a_stale_attention_flag(manager):
     """Re-consent that completed elsewhere is re-consent."""
     manager._needs_attention.add("google_drive")
