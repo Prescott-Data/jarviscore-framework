@@ -797,6 +797,10 @@ def test_replies_reach_people_without_the_runtimes_receipt_ids():
     assert for_people("Done (receipt tool:wf-1:step-2:3). p-1a2b3c4d is in the thread.") == (
         "Done. p-1a2b3c4d is in the thread.")
     assert for_people("The receipts show nothing odd.") == "The receipts show nothing odd."
+    # As a result summary wrote it, in Markdown (live):
+    assert for_people("Blocked (`tool_receipt_id`: tool:`room-claims-desk-b2713ce108`:`step-2-payout`:3). "
+                      "The record lists `GB94BARC10201530093459`.") == (
+        "Blocked. The record lists `GB94BARC10201530093459`.")
 
 
 def test_finished_work_says_where_it_was_done():
