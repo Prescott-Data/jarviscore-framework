@@ -33,7 +33,13 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 
 <div class="changelog-release" markdown>
 
-## Unreleased
+## 3.0.1 <span class="changelog-date">2026-10-27</span>
+
+<div class="changelog-meta" markdown>
+<a class="changelog-release-link" href="https://github.com/Prescott-Data/jarviscore-framework/releases/tag/v3.0.1" target="_blank" rel="noopener noreferrer">View release on GitHub →</a>
+</div>
+
+Needs Nexus 0.7.1 or later for your own systems (`api_base_url`); the bundled compose file uses it.
 
 ### Fixed
 
