@@ -61,8 +61,9 @@ def _action(event: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "seq": event.get("seq"), "at": event.get("ts"),
         "sink": data.get("sink") or "provider",
-        "action": data.get("action") or data.get("method"),
-        "target": data.get("target") or f"{data.get('host', '')}{data.get('path', '')}",
+        # Refused before any request was built (a missing scope): name the effect and the integration.
+        "action": data.get("action") or data.get("method") or data.get("effect"),
+        "target": data.get("target") or f"{data.get('host', '')}{data.get('path', '')}" or data.get("atom") or "",
         "outcome": data.get("outcome"), "rule": data.get("rule"), "enforced": data.get("enforced"),
         **({"reason": data["reason"]} if data.get("reason") else {}),
         **({"scopes": (data.get("scope") or {}).get("requirements") or []} if data.get("scope") else {}),

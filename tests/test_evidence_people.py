@@ -243,3 +243,17 @@ def test_erasing_one_person_keeps_the_content_of_a_run_that_also_worked_for_anot
     remaining = {name for _, _, names in os.walk(os.path.join(root, "content")) for name in names}
     assert remaining == {f"{shared}.json", f"{theirs}.json"}
     assert verify(root).ok
+
+
+def test_a_call_refused_for_a_missing_scope_names_its_effect_and_integration(tmp_path):
+    log = Journal(str(tmp_path))
+    log.append("wf/approve", "policy.decision", {
+        "call_id": "c1", "acting_for": "acme/dave", "atom": "claims_hub_approve_claim", "effect": "write",
+        "provider": "claims_hub", "outcome": "deny", "enforced": True, "rule": "scope-missing",
+        "reason": "acme/dave does not hold the scope claims.approve",
+    })
+
+    [run] = account(str(tmp_path), "acme/dave")
+    [decision] = run["decisions"]
+
+    assert (decision["action"], decision["target"]) == ("write", "claims_hub_approve_claim")

@@ -1882,6 +1882,16 @@ capability; if one fails, report what failed.
     def _restore_subagent_state(self, state: KernelState) -> None:
         self._candidates = list(state.internal_variables.get("_coder_candidates") or [])
 
+    def _replay_facts(self) -> Dict[str, Any]:
+        return {
+            "atom_tools": list(getattr(self, "_atom_tools", None) or ()),
+            "out_of_reach": {name: list(value) for name, value in (getattr(self, "_out_of_reach", None) or {}).items()},
+        }
+
+    def _restore_replay_facts(self, facts: Dict[str, Any]) -> None:
+        self._atom_tools = list(facts.get("atom_tools") or ())
+        self._out_of_reach = {name: tuple(value) for name, value in (facts.get("out_of_reach") or {}).items()}
+
     # ─────────────────────────────────────────────────────────────
     # Run Override
     # ─────────────────────────────────────────────────────────────

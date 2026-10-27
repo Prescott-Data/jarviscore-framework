@@ -50,6 +50,9 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 - **No agent waits on a room's agent.** Other agents could ask a room's agent directly (`ask_capability`); it never answers peer requests, so the asker waited out the whole timeout (5 minutes). It is no longer offered as a peer, as it already was not for planning.
 - **The room agent starts work only in the room.** It no longer has the peer tools (`ask_peer`, `ask_capability`), which did work out of the room's sight and held the turn until the peer answered.
 - **Your own systems through Nexus.** A provider registered in Nexus with an `api_base_url` (an in-house claims or ERP system) can now be called on that host. Before, only hosts in the shipped catalogue were accepted, so its credential was refused everywhere.
+- **Replay asks the model exactly what the run asked.** A replay now starts where the run's loop started (a resumed run from its checkpoint, after the approved action), offers the tools the run was offered, and keeps a gate's own model calls (the effect reviewer's) with the gate. Before, a run that waited for an approval, or ran with memory or a coder's integrations, replayed its decisions but asked the model differently, and a gate's model answer could be handed to the agent. In our live claims runs, model requests identical to the record went from none to all (14 of 14).
+- **The model no longer sees runtime plumbing.** `_nexus_connection_id`, `_nexus_provider`, `_resume` and `_new_execution_epoch` are left out of the agent's input context; code reads them as before.
+- **Clearer evidence output.** `jarviscore verify` says "(1 refused before approval)" rather than "(0 refused, 1 refused before approval)"; `jarviscore evidence` names the effect and integration of a call refused for a missing scope, and shows `agent=-` for room runs. A step paused for a person is logged as paused, not as an error.
 
 </div>
 

@@ -913,6 +913,9 @@ class AutoAgent(Profile):
                         "✓ Kernel execution succeeded (agent=%s, dispatches=%d)",
                         self.agent_id, len(meta.get("dispatches", []))
                     )
+                elif output.status == "yield":
+                    # Waiting for a person (an approval, a connection): not a failure.
+                    self._logger.info("⏸ Kernel execution paused: %s", output.summary)
                 else:
                     self._logger.warning("✗ Kernel execution: %s", output.summary)
 

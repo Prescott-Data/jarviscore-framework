@@ -156,3 +156,16 @@ def test_the_verify_command_exits_by_what_it_found(tmp_path, monkeypatch, capsys
     assert '"ok": false' in capsys.readouterr().out
 
     assert _verify_cli(monkeypatch, str(tmp_path / "nowhere")) == 2
+
+
+def test_summary_names_only_the_refusals_there_are():
+    from jarviscore.evidence.journal import Verification
+
+    def summary(refused, previewed):
+        return Verification("j", runs=1, events=4, effects=2, refused=refused,
+                            refused_in_preview=previewed).summary()
+
+    assert summary(0, 0) == "1 run(s), 4 event(s), 2 effect(s) (0 refused): intact"
+    assert summary(2, 0) == "1 run(s), 4 event(s), 2 effect(s) (2 refused): intact"
+    assert summary(0, 1) == "1 run(s), 4 event(s), 2 effect(s) (1 refused before approval): intact"
+    assert summary(2, 1) == "1 run(s), 4 event(s), 2 effect(s) (2 refused, 1 refused before approval): intact"

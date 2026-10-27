@@ -214,8 +214,9 @@ assurance, how they were authenticated), `approval.refused`, `approval.claim`,
 
 Every agent run keeps, in its step's journal, what its decisions depended on
 from outside its own logic: each model request and response, what each gate
-returned (approvals, previews, reviews), what each tool returned, and the
-task, context, tools, budget and versions it started with. The chain holds
+returned (approvals, previews, reviews), what each tool returned, the
+task, context, tools, budget and versions it started with, and where its loop
+started (a resumed run starts from its checkpoint). The chain holds
 their digests; the content is kept beside it, content-addressed, so it can be
 erased (a retention limit, a person's right to erasure) without breaking
 `jarviscore verify`.
@@ -232,7 +233,8 @@ wf-12/pay: reproduced (2 decision(s), 3 model call(s), 3 request(s) identical to
 A replay rebuilds the agent (by its class name; an agent class defined in a script
 or inside a function needs `replay(root, run, factory=...)` from Python) and
 answers every model call, gate and tool from the record, under the person,
-mandate and scopes the run had. **Nothing is called and nothing acts.** A run reproduces when the
+mandate and scopes the run had. A gate's own model calls (an effect reviewer's)
+are played back with the gate. **Nothing is called and nothing acts.** A run reproduces when the
 agent makes the same decisions (each tool, with the same arguments) and ends the
 same way. It also says how many model requests were identical to the record,
 with the runtime clock masked, the one thing a replay cannot reproduce. A run

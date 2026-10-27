@@ -1590,6 +1590,11 @@ class BaseSubAgent(ABC):
         _trace = trace if trace is not None else create_noop_trace()
         self._run_trace = _trace
         await self._carry_out_decided_actions(state, _trace)
+        # Where the loop starts (after any approved action was carried out) is kept,
+        # and a replay starts from the same place (evidence.replay).
+        from jarviscore.evidence.replay import loop_start
+        state = loop_start(self, state)
+        self._current_state = state
         total_tokens = {"input": 0, "output": 0, "total": state.tokens_used}
         total_cost = state.total_cost_usd
         carries_native = getattr(self.llm_client, "carries_native_tools", None)
@@ -2561,6 +2566,17 @@ class BaseSubAgent(ABC):
 
     def _restore_subagent_state(self, state: KernelState) -> None:
         """Restore subclass runtime state from a checkpoint."""
+
+    def _replay_facts(self) -> Dict[str, Any]:
+        """What this subclass's prompts depend on that the host decided before the loop.
+
+        Kept where the loop starts, so a replay (which has no registry, vault or
+        gateway) prompts the agent as the run did. JSON values only.
+        """
+        return {}
+
+    def _restore_replay_facts(self, facts: Dict[str, Any]) -> None:
+        """Put back what ``_replay_facts`` kept, on replay."""
 
     async def teardown(self) -> None:
         """Release resources owned by this subagent instance."""

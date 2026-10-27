@@ -576,7 +576,9 @@ class ContextManager:
                      "_recalled", "_athena_memory", "_ltm_summary",
                      "_mailbox_context",
                      # The router's own record of choosing this role, for the envelope.
-                     "_kernel_routing"}
+                     "_kernel_routing",
+                     # Runtime plumbing the code reads (the sandbox gets these from the run context).
+                     "_nexus_connection_id", "_nexus_provider", "_resume", "_new_execution_epoch"}
         other = {
             key: value for key, value in state.context.items()
             if key not in skip_keys and not _is_empty(value)
