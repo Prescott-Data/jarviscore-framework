@@ -103,6 +103,28 @@ A page that fails to load carries the HTTP `status_code`; one the site refuses
 with 401 or 403 is marked `access: protected`. The agent decides what to do
 next; the runtime does not retry on its behalf.
 
+`await search.extract_content(url)` also preserves publisher descriptions that
+are absent from the readable HTML, such as a biography in schema.org JSON-LD
+under `ProfilePage.mainEntity`. HTML description meta tags and descriptive
+Person, Organization (including common subtypes), page and article entities
+are returned in `publisher_metadata`. Arrays, `@graph`, nested relationships
+such as `worksFor` and same-document `@id` references are supported. Each record
+retains the final source URL, format and, for JSON-LD, script index and JSON path.
+Remote contexts and reference URLs are never fetched; arbitrary JavaScript,
+application-state scripts, unrelated schema types and malformed JSON are ignored.
+Parsing and output are bounded; unusually large values or graphs may be omitted.
+
+`visible_content` contains only the readable page extraction. `content` and
+`main_content` include that text followed by a separately labelled metadata
+section, so text-only consumers do not silently lose publisher claims.
+`meta_tags` remains available unchanged. Metadata does not influence whether the
+existing browser fallback is attempted.
+
+**Metadata is not verification.** Every metadata record carries
+`provenance: "publisher_metadata"` and `independently_verified: false`. A
+publisher's biography or an agency's description of its own register may be
+self-reported; neither is automatically independent corroboration or proof.
+
 ---
 
 ## Which providers to use

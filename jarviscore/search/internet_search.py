@@ -20,6 +20,10 @@ from urllib.parse import quote_plus, urlparse, urljoin
 
 from jarviscore.core.egress import Egress, configured_egress
 from jarviscore.core.search_deadlines import search_deadline
+from jarviscore.search.publisher_metadata import (
+    append_publisher_metadata,
+    extract_publisher_metadata,
+)
 
 # beautifulsoup4 — required for HTML→Markdown extraction (a core dependency).
 try:
@@ -1116,6 +1120,7 @@ class InternetSearch:
                     
                     html = await response.text()
                     soup = BeautifulSoup(html, 'html.parser')
+                    publisher_metadata = extract_publisher_metadata(soup, final_url)
                     
                     # Try to get the title
                     title = ""
@@ -1146,6 +1151,10 @@ class InternetSearch:
                         if browser_content and len(browser_content) > len(markdown_content):
                             markdown_content = browser_content
 
+                    visible_content = markdown_content
+                    markdown_content = append_publisher_metadata(
+                        visible_content, publisher_metadata,
+                    )
                     
                     # Extract links for optional traversal (same-domain crawling)
                     links: List[str] = []
@@ -1174,6 +1183,8 @@ class InternetSearch:
                         "title": title,
                         "content": markdown_content, # Primary content is now Markdown
                         "main_content": markdown_content,
+                        "visible_content": visible_content,
+                        "publisher_metadata": publisher_metadata,
                         "content_length": len(markdown_content),
                         "content_type": content_type,
                         "meta_tags": meta_tags,
