@@ -6,9 +6,10 @@ ATOM_POLICY = {
 
 async def dropbox_download_file(dropbox_path: str, destination_path: str) -> dict:
     """Download file. POST https://content.dropboxapi.com/2/files/download"""
+    import json
     import os
     try:
-        resp = await nexus_call('POST', 'https://content.dropboxapi.com/2/files/download', headers={'Dropbox-API-Arg': f'{{"path": "{dropbox_path}"}}'})
+        resp = await nexus_call('POST', 'https://content.dropboxapi.com/2/files/download', headers={'Dropbox-API-Arg': json.dumps({'path': dropbox_path})})
         if resp['status_code'] != 200:
             return {'success': False, 'data': None, 'error': f"Download failed: {resp['status_code']} {resp['body']}"}
         os.makedirs(os.path.dirname(os.path.abspath(destination_path)), exist_ok=True)
