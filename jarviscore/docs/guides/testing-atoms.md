@@ -8,6 +8,10 @@ description: "Validate custom JarvisCore integration functions with static analy
 
 When you add a custom atom to a bundle, the `jarviscore atom` CLI gives you a structured two-mode test harness. No external test framework is required, and no live API calls are needed to get started.
 
+For shipped OneDrive/Outlook read operations, see the
+[Microsoft Graph read-only atom contracts](microsoft-graph-read-atoms.md), including
+opaque pagination, original byte transport, and the blocked OneDrive download gate.
+
 ---
 
 ## Two Test Modes

@@ -13,6 +13,11 @@ from pathlib import Path
 
 ATOMS = Path("jarviscore/integrations/atoms")
 
+# Nexus provider_names.md at fef5253b9056375cd3b3cf92ac293d95613b8595
+# registers microsoft-graph; the existing SDK atom bundle is named msgraph.
+# This derives hosts only, not connection acceptance, scopes or provider aliases.
+NEXUS_PROVIDER_BUNDLES = {"microsoft-graph": "msgraph"}
+
 
 def literal_parts(node):
     """Reconstruct a string from a Constant or JoinedStr, placeholders as '{}'."""
@@ -29,13 +34,24 @@ def literal_parts(node):
     return None
 
 
-def hosts_in(source):
+def hosts_in(source, *, include_docstrings=True):
     found = set()
     try:
         tree = ast.parse(source)
     except SyntaxError:
         return found
+    docstrings = {
+        id(node.body[0].value)
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+        and node.body
+        and isinstance(node.body[0], ast.Expr)
+        and isinstance(node.body[0].value, ast.Constant)
+        and isinstance(node.body[0].value.value, str)
+    }
     for node in ast.walk(tree):
+        if not include_docstrings and id(node) in docstrings:
+            continue
         text = literal_parts(node)
         if not text or "://" not in text:
             continue
@@ -50,7 +66,14 @@ def main():
     by_provider = defaultdict(set)
     for provider_dir in sorted(p for p in ATOMS.iterdir() if p.is_dir()):
         for atom in provider_dir.glob("*.py"):
-            by_provider[provider_dir.name] |= hosts_in(atom.read_text())
+            # Graph API reference docstrings are not credential destinations.
+            # Preserve other bundles' existing derivation behavior in this change.
+            by_provider[provider_dir.name] |= hosts_in(
+                atom.read_text(), include_docstrings=provider_dir.name != "msgraph"
+            )
+
+    for provider, bundle in NEXUS_PROVIDER_BUNDLES.items():
+        by_provider[provider] |= by_provider[bundle]
 
     # A bare "{}" is the whole host coming from user data. It constrains nothing,
     # so it is not written: those providers are bound by the domain recorded on

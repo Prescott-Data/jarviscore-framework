@@ -267,6 +267,9 @@
   "mattermost": [
     "api.mattermost.com"
   ],
+  "microsoft-graph": [
+    "graph.microsoft.com"
+  ],
   "mixpanel": [
     "api.mixpanel.com",
     "data.mixpanel.com",
