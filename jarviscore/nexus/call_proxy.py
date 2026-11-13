@@ -408,19 +408,20 @@ class NexusCallProxy:
         from jarviscore.nexus.client import NexusClient
         provider = self._provider_for(connection_id)
         sent_to = url
+        headers = _with_idempotency_key(provider, method, headers, authority)
+        request_facts = {**kwargs, "headers": headers}
         grounding_rules = _grounding_rules()
         grounding = None
         # The broker's own re-reads for grounding are sources, never held to it.
         if grounding_rules and (authority or {}).get("atom") != "control.grounding":
             grounding = await self._ground(
-                connection_id, provider, method, url, kwargs, authority, grounding_rules,
+                connection_id, provider, method, url, request_facts, authority, grounding_rules,
             )
         if isinstance((authority or {}).get("preview"), list) and method.upper() not in ("GET", "HEAD", "OPTIONS"):
             # A preview of an action before a person is asked: decided, never sent.
-            _preview(provider, method, url, authority, grounding, kwargs)
+            _preview(provider, method, url, authority, grounding, request_facts)
         # Decided before anything leaves this process, including the credential lookup.
-        call_id, run, journal, strict = _decide(provider, method, url, authority, grounding, kwargs)
-        headers = _with_idempotency_key(provider, method, headers, authority)
+        call_id, run, journal, strict = _decide(provider, method, url, authority, grounding, request_facts)
 
         strategy = None
         request_kwargs = None

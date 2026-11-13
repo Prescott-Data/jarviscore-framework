@@ -102,7 +102,7 @@ grounding:
 |---|---|
 | `match` | `provider`/`system`, `method`, `atom`, `host`, `path` (a template such as `/payments/{id}`) |
 | `bind[]` | Records to follow, in order. `name`; `read.provider`, `read.path` (template); `read.record` (dot path to the record in the response), or `read.items` + `read.key` for a list; `where`: path variables or record fields, each selected by an expression |
-| Expressions | `request.json.*`, `request.form.*`, `request.query.*`, `request.path.*`, `input.*` (the caller's `execute_goal(context=...)`), or an earlier binding (`invoice.supplier_id`). `[*]` expands a list |
+| Expressions | `request.json.*`, `request.form.*`, `request.query.*`, `request.headers.<lowercase-name>`, `request.path.*`, `input.*` (the caller's `execute_goal(context=...)`), or an earlier binding (`invoice.supplier_id`). `[*]` expands a list |
 | `require[]` | `field` (a `request.*` path), one of `equals`, `one_of`, `at_most`, and `as` |
 | `as` | `exact` (default), `id`, `text` (NFC, exact), `iban` (ISO 13616 with check digits), `money` and `number` (decimal), `email` (IDNA domain) |
 | `selectors_from` | Where `where` may take selectors from: `input`, `request`. `[input]` pins which record to the caller |
@@ -163,7 +163,7 @@ scopes:
 | `require[].match` | A provider call (`provider`/`system`, `method`, `host`, `path` with `{variables}`, `atom`, `effect`) or another effect (`sink`, `action`, `target` glob, `origin`, `agent`), not both. Match the operation (`method` and `path`) to hold any code reaching it; `atom` alone holds only that integration |
 | `require[].requires` | The scope the person the work is for must hold |
 | `require[].approved_by` | The scope the approver must hold (provider calls only). The action then always needs an approval from an `asserted` or `verified` approver, whose scopes come from their assertion, `Approver(scopes=...)` or `grants`. Only an integration's action can wait for an approval: other code reaching the operation carries none and is refused |
-| `require[].limits` | Each `{field, kind, at_most\|one_of\|equals: <term>}`: the request `field` (`json.*`, `query.*`, `form.*`, `path.<variable>`; effects: `attributes.*`, `target`) compared as `kind` (`money`, `number`, `email`, `iban`, `id`, `text`, `exact`) with the holder's grant term. `at_most` takes `money` or `number`. `email` compares the domain case-insensitively and the local part exactly |
+| `require[].limits` | Each `{field, kind, at_most\|one_of\|equals: <term>}`: the request `field` (`json.*`, `query.*`, `form.*`, `headers.<lowercase-name>`, `path.<variable>`; effects: `attributes.*`, `target`) compared as `kind` (`money`, `number`, `email`, `iban`, `id`, `text`, `exact`) with the holder's grant term. `at_most` takes `money` or `number`. `email` compares the domain case-insensitively and the local part exactly |
 | `grants` | Scopes per person key, for people whose sign-in does not carry them. Your application's `OnBehalfOf(..., scopes=...)` comes first for every scope it names |
 | `unattended` | Scopes work done for no one holds |
 
@@ -175,6 +175,18 @@ is checked. A requirement that cannot be read refuses what it matches (everythin
 when its match cannot be read); a `scopes` section that cannot be read refuses
 everything. `jarviscore policy check` names each problem; `jarviscore policy
 scopes` prints who may do what.
+
+Header selectors use HTTP's case-insensitive names, exposed in lowercase. Every duplicate
+value must satisfy the limit; missing, malformed or unreadable headers fail closed. For an
+API whose resource selector is a JSON-valued header, use an `exact` limit on the entire
+serialized value (not a guessed substring or a blanket provider grant), for example
+`{field: headers.dropbox-api-arg, kind: exact, one_of: selectors}`. The application supplies
+the selected header values in `OnBehalfOf` scope terms. Native shipped atoms and model-code
+calls reach the same check before credential lookup. Decision records name the field and
+outcome, not its value. This adds no credential access to model tools and does not relax the
+existing restrictions on model-written mutations or unreviewed POST operations. See
+`tests/test_scope_headers.py` for effective-header, duplicate-value, shipped POST and model
+GET refusal-before-credentials regressions.
 
 Browser requests are intercepted, in report mode too, wherever a `sink: browser`
 requirement exists, so a refusal stops them. A page's own reads (`fetch`/XHR

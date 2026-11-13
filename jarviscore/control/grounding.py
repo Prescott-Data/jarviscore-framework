@@ -227,6 +227,7 @@ class Request:
     form: Optional[Dict[str, Any]] = None
     #: The body is sent in a form grounding cannot read (raw content, files).
     opaque: bool = False
+    headers: dict[str, Any] | None = None
 
     def view(self) -> Dict[str, Any]:
         view: Dict[str, Any] = {"query": self.query}
@@ -234,6 +235,8 @@ class Request:
             view["json"] = self.json
         if self.form is not None:
             view["form"] = self.form
+        if self.headers is not None:
+            view["headers"] = self.headers
         return view
 
 
@@ -257,13 +260,27 @@ def request_from(method: str, url: str, kwargs: Dict[str, Any]) -> Request:
         query[key] = [*query[key], value] if isinstance(query.get(key), list) else (
             [query[key], value] if key in query else value
         )
+    headers, opaque_headers = None, False
+    if kwargs.get("headers") is not None:
+        headers = {}
+        try:
+            import httpx
+
+            # HTTP names are case-insensitive; every duplicate value must satisfy its limit.
+            for key, value in httpx.Headers(kwargs["headers"]).multi_items():
+                headers[key] = [*headers[key], value] if isinstance(headers.get(key), list) else (
+                    [headers[key], value] if key in headers else value
+                )
+        except Exception:  # noqa: BLE001 - unreadable transport facts cannot establish authority
+            headers, opaque_headers = {}, True
     content, data, files, body = (kwargs.get(name) for name in ("content", "data", "files", "json"))
     opaque = content is not None or bool(files) or (data is not None and not isinstance(data, dict))
     form = data if isinstance(data, dict) and data and not opaque else None
     json_body = body if not opaque and form is None else None
     return Request(
         method=method.upper(), host=parts.netloc.lower(), path=normalized_path(parts.path or "/"),
-        query=query, json=json_body, form=form, opaque=opaque or opaque_query,
+        query=query, json=json_body, form=form, opaque=opaque or opaque_query or opaque_headers,
+        headers=headers,
     )
 
 
