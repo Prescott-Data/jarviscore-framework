@@ -1,8 +1,11 @@
 # Credential-bound original downloads
 
-`NexusCallProxy.call(..., original_download=True)` is an explicit native GET-only
-original-byte mode. The injected `nexus_call` accepts the same opt-in. It does not
-create a second credential path: normal operation contracts, provider host binding,
+`NexusCallProxy.call(..., original_download=True, max_bytes=16777216)` is an
+explicit native original-byte mode. GET is supported; POST is restricted to the
+verified native read contract for Dropbox's direct `/2/files/download` endpoint,
+and **every POST redirect is refused**. The injected `nexus_call` accepts the same
+opt-in. It does not create a second credential path: normal operation contracts,
+provider host binding,
 organisation resource scopes and the acting person's authority apply to the initial
 API request, before any credential lookup or I/O. Configure provider-wide
 `request_path` limits for selected originals; narrowly matched rules alone do not
@@ -23,7 +26,8 @@ if response["ok"]:
 
 Only an operator configuring the native runtime may supply redirect download
 hosts. No download-host defaults are enabled. `NEXUS_ORIGINAL_DOWNLOAD_HOSTS` is a
-JSON provider-to-exact-DNS-host list in process settings, for example:
+JSON provider-to-exact-DNS-host list in the trusted settings field
+`nexus_original_download_hosts`, for example:
 
 ```json
 {"box": ["dl.boxcloud.com"]}
@@ -61,14 +65,67 @@ Verified against official documentation on 2026-11-13 (not live OAuth acceptance
   `b0mpua-by3301.files.1drv.com`, not a universal allowlist. Other tenants/CDNs must
   be independently verified and configured by exact hostname; no `*.1drv.com` or
   `*.sharepoint.com` permission is granted.
+- [Google Drive download guide](https://developers.google.com/workspace/drive/api/guides/manage-downloads)
+  documents original **blob** reads through `files.get` with `alt=media`. Workspace
+  document exports and Google Vids long-running downloads are different operations
+  and are not synthesized by this atom. Direct original reads need no redirect
+  allowlist; any unexpected redirect still fails closed unless independently
+  verified and operator-configured.
+- [Dropbox file download reference](https://docs.dropboxapi.com/dropbox-api/api-reference/user-endpoints/files/download)
+  documents `POST https://content.dropboxapi.com/2/files/download` as a
+  **content-download**, requiring `files.content.read`, with JSON selectors in
+  `Dropbox-API-Arg` and a direct binary 200 response. Non-ASCII/control characters
+  are JSON-escaped, preserving the selector exactly. This reviewed read endpoint
+  is the sole supported original POST. Native shipped/runtime origin, declared
+  `read`, and a verified matching operation contract are all mandatory, even
+  with policy enforcement disabled; a model/registry read claim cannot authorize
+  POST. Generic mutation policy is unchanged. All POST redirects are refused,
+  including operator-allowlisted destinations.
 
-The canonical corpus currently contains Box metadata/upload atoms, but no Box
-original-download atom and no OneDrive atom namespace. No existing atom was
-rewired or renamed. Existing `msgraph` mail `$value` atoms and Dropbox POST
-download behavior are unchanged. This GET primitive does not enable Dropbox POST
-redirect downloads. It does not establish that `microsoft-graph` and `msgraph`
-name the same broker provider. Operator configuration must use the provider
-actually bound to the opaque connection; no alias is inferred.
+## Registry-first file original atoms
+
+| Canonical SDK atom | Inputs |
+| --- | --- |
+| `box_download_file` (`box`) | `file_id`, optional `destination_path=""`, `max_bytes=16777216` |
+| `msgraph_download_drive_item` (`msgraph`) | `item_id`, optional `drive_id=""`, `destination_path=""`, `max_bytes=16777216` |
+| `google_drive_download_file` (`google_drive`) | `file_id`, required `destination_path`, optional `max_bytes=16777216` |
+| `dropbox_download_file` (`dropbox`) | `dropbox_path`, required `destination_path`, optional `max_bytes=16777216` |
+
+Each canonical file is seeded by the existing registry discovery mechanism and
+has native `read`/`never` policy plus a verified endpoint contract. No raw HTTP,
+credential access, download URL output, or independently widened host permissions
+exist in these atoms. IDs are encoded as individual segments; Dropbox selectors
+retain lossless ASCII JSON serialization. Server-selected original-resource scopes
+must still be granted. Unsupported hosts/providers remain gated.
+
+Box and Graph return `data.content_base64` and `data.byte_count`, plus the chosen
+`data.destination_path` only when saving. Base64 preserves empty and non-UTF-8
+originals; strict native `{"__bytes__": "base64"}` RPC envelopes are supported,
+never text fallbacks. Existing Drive/Dropbox result shapes are retained:
+`data={"destination_path": ..., "bytes": ...}` (Drive also retains top-level
+`file_id`). Raw errors, provider filenames/headers, and signed URLs are not returned.
+
+Box/Graph destinations must be safe, relative native output paths. Drive/Dropbox
+retain direct-call absolute path support; in the sandbox an absolute destination
+must belong to its injected native `output_dir`, while relative paths are rooted
+there. Caller-chosen Unicode/nested names are allowed. Empty segments, traversal,
+absolute Box/Graph paths, backslashes, control characters, and colon-based paths
+are rejected before transfer. Files are created exclusively through directory
+file descriptors with no symlink following; existing files/symlinks/hardlinks are
+not overwritten. No directory/file is created before successful bounded-byte
+validation. Partial file writes are removed on failure.
+
+The native Coder registry path supplies the parent-side read operation grant and
+operation identity. Its legacy `_mutation_authority` transport key also carries
+reviewed read POST identity; this does **not** change the declared read effect or
+permit arbitrary model POSTs. Do not fabricate grants in model code.
+
+No OneDrive namespace or `microsoft-graph`/`msgraph` broker alias is introduced.
+The new Graph atom explicitly uses the SDK's existing `msgraph` provider ID.
+An operator must bind that opaque connection correctly and provision independently
+verified exact redirect hosts under that ID. A catalogue entry for both spellings
+is not proof of broker aliasing. Live tenant/consent/provider acceptance remains
+unverified; inherited seed `verified` labels are not live acceptance evidence.
 
 ## Boundary guarantees
 
@@ -77,8 +134,9 @@ actually bound to the opaque connection; no alias is inferred.
   timeout (default 30 seconds, maximum 300). Bodies stream inside Nexus; oversized,
   compressed or failed responses yield no partial bytes. `Accept-Encoding` is
   forced to `identity` and unexpected content encodings are rejected.
-- At most three manual redirects. Only one absolute, unambiguous HTTPS `Location`
-  per response is accepted; userinfo, fragments, nonstandard ports and unknown
+- GET permits at most three manual redirects; POST permits none. Only one
+  absolute, unambiguous HTTPS `Location` per response is accepted; userinfo,
+  fragments, nonstandard ports and unknown
   hosts are rejected. Redirects back to any credential-bearing provider API host
   are rejected even if accidentally operator-allowlisted. A continuation is a
   capability issued by the authorized initial resource server, not independently

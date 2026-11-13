@@ -1,12 +1,12 @@
 ---
 title: "Microsoft Graph read-only atoms"
-description: "OneDrive metadata, Outlook pages, and original message/attachment bytes through injected Nexus calls."
+description: "OneDrive originals/metadata, Outlook pages, and original message/attachment bytes through injected Nexus calls."
 ---
 
 # Microsoft Graph read-only atoms
 
 These standalone atoms belong to the existing **`msgraph` SDK bundle**. The
-canonical Nexus provider identifier is **`microsoft-graph`**, recorded in
+provider identifier **`microsoft-graph`** is recorded in
 [Nexus provider_names.md](https://github.com/Prescott-Data/nexus-framework/blob/fef5253b9056375cd3b3cf92ac293d95613b8595/provider_names.md).
 The host catalogue derives `graph.microsoft.com` for both identifiers from the
 same bundle. This is a destination catalogue entry, **not** a connection alias,
@@ -25,6 +25,7 @@ All paths below are relative to `https://graph.microsoft.com/v1.0`.
 | Atom | Endpoint / inputs |
 | --- | --- |
 | `msgraph_get_drive_item` | `/me/drive/items/{item_id}`; optional `drive_id` selects `/drives/{drive_id}` instead of `/me/drive` |
+| `msgraph_download_drive_item` | `/me/drive/items/{item_id}/content`; optional `drive_id` selects `/drives/{drive_id}`; optional safe `destination_path=""`, `max_bytes=16777216` |
 | `msgraph_list_drive_children` | `/me/drive/root/children` by default; `folder_id` selects `/items/{folder_id}/children`; optional `drive_id` |
 | `msgraph_list_mail_folders` | `/me/mailFolders`; optional `parent_folder_id` selects `/me/mailFolders/{id}/childFolders`; `include_hidden=False` by default |
 | `msgraph_list_messages` | `/me/messages`; optional `folder_id` selects `/me/mailFolders/{id}/messages` |
@@ -97,13 +98,20 @@ not an invented export format.
 
 ## Explicit remaining gates
 
-- **OneDrive original download is blocked.** Graph
-  [driveItem `/content`](https://learn.microsoft.com/en-us/graph/api/driveitem-get-content?view=graph-rest-1.0)
-  redirects to a preauthenticated download URL. A credential-bound native
-  primitive that consumes the redirect privately and retrieves the original
-  without exposing the URL or forwarding credentials is missing. No OneDrive
-  download atom is offered; raw HTTP, custom OAuth, expanded download-host
-  allowances, and blanket `follow_redirects` are not substitutes.
+- **OneDrive originals require exact operator download-host gating.**
+  `msgraph_download_drive_item` uses the native
+  [bounded original-download primitive](original-downloads.md), not raw HTTP.
+  Graph [driveItem `/content`](https://learn.microsoft.com/en-us/graph/api/driveitem-get-content?view=graph-rest-1.0)
+  redirects to a preauthenticated URL consumed only inside Nexus without
+  credentials, ambient cookies/auth, or URL output. The trusted constructor field
+  is `original_download_hosts={"msgraph": ["independently.verified.exact.host"]}`;
+  the settings field is `nexus_original_download_hosts`, from
+  `NEXUS_ORIGINAL_DOWNLOAD_HOSTS` JSON. There are no host defaults or wildcards.
+  Unknown tenant/CDN hosts fail closed. This SDK provider ID does not establish a
+  `microsoft-graph`/`msgraph` broker alias. Original bytes return as base64 with
+  a byte count, and optionally as an exclusive no-follow file at a safe relative
+  native output path. Default limit is 16 MiB, hard ceiling 64 MiB; no text
+  conversion, provider filename, signed URL, or partial failed download is returned.
 - **Live provider acceptance is unverified.** Tests use injected Nexus response
   fixtures, not a tenant connection. Live connection/bundle identity binding,
   delegated consent, folder-specific nextLink shapes, permissions, throttling,

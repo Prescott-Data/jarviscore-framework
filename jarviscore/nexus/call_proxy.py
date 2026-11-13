@@ -406,9 +406,11 @@ class NexusCallProxy:
             authority:      What the call arrives with: the atom, its declared effect,
                             where its code came from, its operation contract and the
                             workflow step. Decided on before any I/O (see control.policy).
-            original_download: Explicit GET-only original-byte mode, held to the
-                            same native authority. Manually follows only server-issued
-                            HTTPS redirects to operator-configured exact content hosts.
+            original_download: Explicit bounded original-byte mode, held to the
+                            same native authority. GET follows only server-issued HTTPS
+                            redirects to operator-configured exact content hosts. POST
+                            requires the verified native Dropbox direct-read contract
+                            and refuses all redirects.
             max_bytes:      Original mode byte limit: default 16 MiB, hard ceiling 64 MiB.
                             No partial bytes, response text/JSON or signed URLs returned.
             **kwargs:       Passed directly to httpx normally; original mode permits
@@ -619,12 +621,18 @@ class NexusCallProxy:
         downloads.validate_intent(method, url, headers, kwargs, max_bytes, timeout)
         provider = self._provider_for(connection_id)
         request_facts = {**kwargs, "headers": headers}
+        if method.upper() == "POST":
+            downloads.validate_read_post(_provider_call(
+                provider, method, url, authority or {}, request_kwargs=request_facts,
+            ))
         rules = _grounding_rules()
         grounding = None
         if rules and (authority or {}).get("atom") != "control.grounding":
             grounding = await self._ground(
                 connection_id, provider, method, url, request_facts, authority, rules,
             )
+        if method.upper() == "POST" and isinstance((authority or {}).get("preview"), list):
+            _preview(provider, method, url, authority, grounding, request_facts)
         # Exactly the same policy, resource scopes and operation contract as call().
         # Redirects are server-issued continuations, never independently chosen intent.
         call_id, run, journal, strict = _decide(
@@ -653,7 +661,7 @@ class NexusCallProxy:
                 strategy = await auth.resolve_strategy(connection_id)
                 ensure_host_allowed(provider, url, strategy.config)
                 placed = NexusClient.apply_strategy_to_request(
-                    strategy, "GET", url, headers=headers, **kwargs,
+                    strategy, method.upper(), url, headers=headers, **kwargs,
                 )
                 downloads.https_url(placed["url"])
                 ensure_host_allowed(provider, placed["url"], strategy.config)
@@ -667,7 +675,7 @@ class NexusCallProxy:
                 if authorization:
                     secrets.add(authorization.split(" ", 1)[-1])
                 return httpx.Request(
-                    "GET", placed["url"], headers=effective_headers, params=placed.get("params"),
+                    method.upper(), placed["url"], headers=effective_headers, params=placed.get("params"),
                     extensions={"timeout": httpx.Timeout(timeout).as_dict()},
                 )
             finally:

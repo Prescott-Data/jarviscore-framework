@@ -1,21 +1,26 @@
-async def google_drive_download_file(file_id: str, destination_path: str) -> dict:
-    """Download one Drive file to a sandbox path."""
-    import os
+ATOM_POLICY = {"effect": "read", "approval": "never"}
+
+
+async def google_drive_download_file(file_id: str, destination_path: str, max_bytes: int = 16777216) -> dict:
+    """Download an original Drive blob through bounded native Nexus to an exclusive sandbox artifact."""
+    from jarviscore.integrations.original_files import (
+        byte_limit,
+        destination,
+        identifier,
+        original_bytes,
+        write_original,
+    )
+
     try:
-        resp = await nexus_call(
-            'GET',
-            f"https://www.googleapis.com/drive/v3/files/{file_id}",
-            params={"alt": "media"},
-            provider='google_drive',
+        byte_limit(max_bytes)
+        encoded_id = identifier(file_id)
+        selected = destination(destination_path, globals().get("output_dir"), relative_only=False)
+        resp = await nexus_call(  # noqa: F821 - injected native credential boundary
+            "GET", f"https://www.googleapis.com/drive/v3/files/{encoded_id}",
+            params={"alt": "media"}, provider="google_drive", original_download=True, max_bytes=max_bytes,
         )
-        if not resp['ok']:
-            return {"success": False, "file_id": file_id, "data": None, "error": resp['body']}
-
-        os.makedirs(os.path.dirname(destination_path), exist_ok=True) if os.path.dirname(destination_path) else None
-        with open(destination_path, "wb") as f:
-            f.write(resp['content'])
-
-        return {"success": True, "file_id": file_id, "data": {"destination_path": destination_path, "bytes": len(resp['content'])}, "error": None}
-
-    except Exception as e:
-        return {"success": False, "file_id": file_id, "data": None, "error": str(e)}
+        content = original_bytes(resp, max_bytes)
+        write_original(content, selected)
+        return {"success": True, "file_id": file_id, "data": {"destination_path": destination_path, "bytes": len(content)}, "error": None}
+    except Exception:  # noqa: BLE001 - transport/file errors must not expose private capabilities
+        return {"success": False, "file_id": file_id, "data": None, "error": "Original download failed"}

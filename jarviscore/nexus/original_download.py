@@ -74,8 +74,8 @@ def https_url(url):
 
 def validate_intent(method, url, headers, kwargs, max_bytes, timeout):
     https_url(url)
-    if method.upper() != "GET" or set(kwargs) - {"params"}:
-        raise ValueError("Original downloads accept GET and selector params only")
+    if method.upper() not in ("GET", "POST") or set(kwargs) - {"params"}:
+        raise ValueError("Original downloads accept GET or reviewed native read POST and selector params only")
     if type(max_bytes) is not int or not 0 < max_bytes <= MAX_BYTES:
         raise ValueError("Original download byte bound must be between 1 and 67108864")
     if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not 0 < timeout <= 300:
@@ -86,6 +86,18 @@ def validate_intent(method, url, headers, kwargs, max_bytes, timeout):
             raise ValueError
     except (TypeError, ValueError):
         raise ValueError("Original download headers cannot supply transport credentials or routing") from None
+
+
+def validate_read_post(call):
+    # Dropbox documents this exact POST as a content download, not a mutation.
+    # A caller's read label or verified model POST contract cannot grant it.
+    from jarviscore.control.policy import TRUSTED_ORIGINS
+
+    parts = urlsplit(call.url)
+    if (call.provider != "dropbox" or parts.hostname != "content.dropboxapi.com"
+            or parts.path != "/2/files/download" or call.code_origin not in TRUSTED_ORIGINS
+            or not call.atom or call.declared_effect != "read" or not call.verified):
+        raise ValueError("Original POST requires a verified native direct content-read operation")
 
 
 def failure(status=0):
@@ -121,7 +133,8 @@ async def transfer(client, initial_request, *, max_bytes, redirect_allowed, refr
                 continue
             if status in _REDIRECTS:
                 locations = response.headers.get_list("location")
-                if hops >= MAX_REDIRECTS or len(locations) != 1 or not redirect_allowed(locations[0]):
+                if (initial_request.method != "GET" or hops >= MAX_REDIRECTS
+                        or len(locations) != 1 or not redirect_allowed(locations[0])):
                     return failure(status)
                 # No original query, headers, client cookies, default auth or selectors.
                 request = httpx.Request("GET", locations[0], headers={
