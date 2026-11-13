@@ -31,6 +31,11 @@ import httpx
 
 from .strategy import apply_strategy
 from .hosts import HostNotAllowed, ensure_host_allowed
+from . import original_download as downloads
+
+
+def _original_download_client(**kwargs):
+    return httpx.AsyncClient(**kwargs)
 
 logger = logging.getLogger(__name__)
 
@@ -333,7 +338,7 @@ class NexusCallProxy:
       with 401, returns the error response as-is and logs ATTENTION.
     """
 
-    def __init__(self, auth_manager):
+    def __init__(self, auth_manager, *, original_download_hosts=None):
         """
         Args:
             auth_manager: an AuthenticationManager, or a zero-argument callable
@@ -341,8 +346,17 @@ class NexusCallProxy:
                 because the mesh injects the shared manager after agent setup,
                 and a proxy that captured a fallback at setup signed from a
                 connection table the consent flow never wrote to.
+            original_download_hosts: Operator-owned provider-to-exact-host lists,
+                copied at construction. Defaults to NEXUS_ORIGINAL_DOWNLOAD_HOSTS.
+                Never accept this configuration from a model or request payload.
         """
         self._auth_source = auth_manager
+        if original_download_hosts is None:
+            import importlib
+
+            settings = importlib.import_module("jarviscore.config.settings").settings
+            original_download_hosts = getattr(settings, "nexus_original_download_hosts", {})
+        self._original_download_hosts = downloads.exact_hosts(original_download_hosts)
 
     @property
     def _auth(self):
@@ -376,6 +390,8 @@ class NexusCallProxy:
         timeout: float = 30.0,
         *,
         authority: Optional[Dict[str, Any]] = None,
+        original_download: bool = False,
+        max_bytes: int = downloads.DEFAULT_MAX_BYTES,
         **kwargs,
     ) -> Dict[str, Any]:
         """
@@ -390,7 +406,13 @@ class NexusCallProxy:
             authority:      What the call arrives with: the atom, its declared effect,
                             where its code came from, its operation contract and the
                             workflow step. Decided on before any I/O (see control.policy).
-            **kwargs:       Passed directly to httpx (json=, params=, data=, etc.)
+            original_download: Explicit GET-only original-byte mode, held to the
+                            same native authority. Manually follows only server-issued
+                            HTTPS redirects to operator-configured exact content hosts.
+            max_bytes:      Original mode byte limit: default 16 MiB, hard ceiling 64 MiB.
+                            No partial bytes, response text/JSON or signed URLs returned.
+            **kwargs:       Passed directly to httpx normally; original mode permits
+                            selector params only, not transport/auth/redirect overrides.
 
         Returns:
             {
@@ -404,7 +426,15 @@ class NexusCallProxy:
 
         Never raises on HTTP errors — returns {"ok": False, "status_code": ...}.
         Raises RuntimeError only on internal proxy failure (no connection, no Nexus).
+        Original mode instead returns an opaque failure; invalid intent raises ValueError,
+        and native policy denials retain their normal behavior.
         """
+        if type(original_download) is not bool:
+            raise ValueError("Original download opt-in must be a boolean")
+        if original_download:
+            return await self._call_original_download(
+                connection_id, method, url, headers, timeout, authority, max_bytes, kwargs,
+            )
         from jarviscore.nexus.client import NexusClient
         provider = self._provider_for(connection_id)
         sent_to = url
@@ -578,6 +608,122 @@ class NexusCallProxy:
             "json": json_body,
             "headers": dict(response.headers),
         }
+
+    async def _call_original_download(self, connection_id, method, url, headers, timeout,
+                                      authority, max_bytes, kwargs):
+        from urllib.parse import unquote
+
+        from jarviscore.auth.principal import operation
+        from jarviscore.nexus.client import NexusClient
+
+        downloads.validate_intent(method, url, headers, kwargs, max_bytes, timeout)
+        provider = self._provider_for(connection_id)
+        request_facts = {**kwargs, "headers": headers}
+        rules = _grounding_rules()
+        grounding = None
+        if rules and (authority or {}).get("atom") != "control.grounding":
+            grounding = await self._ground(
+                connection_id, provider, method, url, request_facts, authority, rules,
+            )
+        # Exactly the same policy, resource scopes and operation contract as call().
+        # Redirects are server-issued continuations, never independently chosen intent.
+        call_id, run, journal, strict = _decide(
+            provider, method, url, authority, grounding, request_facts,
+        )
+        auth = self._auth
+        strategy = None
+        secrets = set()
+        refreshed = False
+
+        async def prepare(refresh=False):
+            nonlocal strategy, refreshed
+            token = operation.set((authority or {}).get("action_id") or call_id)
+            try:
+                if refresh:
+                    refreshed = True
+                    gateway = getattr(auth, "nexus_client", None)
+                    if gateway is not None:
+                        await gateway.refresh_connection(connection_id)
+                    forget = getattr(auth, "forget_strategy", None)
+                    if callable(forget):
+                        forget(connection_id)
+                    else:
+                        auth._strategy_cache.pop(connection_id, None)
+                # No alternate local credential after a broker refusal or failure.
+                strategy = await auth.resolve_strategy(connection_id)
+                ensure_host_allowed(provider, url, strategy.config)
+                placed = NexusClient.apply_strategy_to_request(
+                    strategy, "GET", url, headers=headers, **kwargs,
+                )
+                downloads.https_url(placed["url"])
+                ensure_host_allowed(provider, placed["url"], strategy.config)
+                effective_headers = httpx.Headers(placed.get("headers", {}))
+                for name in ("host", "cookie", "proxy-authorization"):
+                    if name in effective_headers:
+                        raise ValueError("Unsafe original download strategy")
+                effective_headers["Accept-Encoding"] = "identity"
+                secrets.update(str(value) for value in strategy.credentials.values() if value)
+                authorization = effective_headers.get("authorization", "")
+                if authorization:
+                    secrets.add(authorization.split(" ", 1)[-1])
+                return httpx.Request(
+                    "GET", placed["url"], headers=effective_headers, params=placed.get("params"),
+                    extensions={"timeout": httpx.Timeout(timeout).as_dict()},
+                )
+            finally:
+                operation.reset(token)
+
+        def redirect_allowed(target):
+            host = downloads.https_url(target)
+            if host not in self._original_download_hosts.get(provider, ()):
+                return False
+            # A signed continuation cannot return to an API resource with different
+            # selectors, even if an operator accidentally allows its API hostname.
+            try:
+                ensure_host_allowed(provider, target, strategy.config)
+            except HostNotAllowed:
+                pass
+            else:
+                return False
+            decoded = target
+            for _ in range(8):
+                if any(secret in decoded for secret in secrets):
+                    return False
+                next_value = unquote(decoded)
+                if next_value == decoded:
+                    break
+                decoded = next_value
+            return True
+
+        log_token = downloads.private_transport_logs()
+        attempted = False
+
+        async def perform():
+            nonlocal attempted
+            request = await prepare()
+            _record_source(provider)
+            _record(journal, run, "effect.attempt", {"call_id": call_id}, strict)
+            attempted = True
+            async with _original_download_client(trust_env=False, follow_redirects=False) as client:
+                return await downloads.transfer(
+                    client, request, max_bytes=max_bytes, redirect_allowed=redirect_allowed,
+                    refresh=lambda: prepare(refresh=True),
+                )
+
+        try:
+            result = await asyncio.wait_for(perform(), timeout=timeout)
+        except Exception:  # noqa: BLE001 - transport errors must not expose private capabilities
+            # Exception strings, HTTP error bodies and chained transport exceptions
+            # can contain credentials or signed URLs. None cross this boundary.
+            result = downloads.failure()
+        finally:
+            downloads.restore_transport_logs(log_token)
+        if attempted:
+            _record(journal, run, "effect.outcome", {
+                "call_id": call_id, "status": result["status_code"], "refreshed": refreshed,
+                "ok": result["ok"],
+            }, False)
+        return result
 
     async def _ground(self, connection_id, provider, method, url, kwargs, authority, rules):
         """Hold the call to the grounding rules that apply to it (control.grounding)."""

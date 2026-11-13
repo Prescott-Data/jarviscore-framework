@@ -228,6 +228,7 @@ class Settings(BaseSettings):
     journal_content_days: int = 30
     # Seconds an idle provider connection is kept for the next call (TLS reuse).
     nexus_keepalive_seconds: float = 120.0
+    nexus_original_download_hosts: Dict[str, list[str]] = Field(default_factory=dict)
     # Keys approval assertions are verified with: one key (key id "default"), or
     # a JSON map of key id to key for rotation. Hold the same on the backend that
     # signs them after its own sign-in (control.approvals.sign_assertion).

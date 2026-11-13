@@ -24,6 +24,10 @@ Nexus is JarvisCore's credential management system and an [open-source framework
   only after checking that the destination host belongs to that provider.
 5. Agent code and the child execution process never receive raw credentials.
 
+For bounded original-file bytes and private server-issued HTTPS continuations,
+see [Credential-bound original downloads](original-downloads.md). Redirect content
+hosts require exact operator configuration; caller-supplied allowlists are rejected.
+
 ---
 
 ## Registering Credentials
