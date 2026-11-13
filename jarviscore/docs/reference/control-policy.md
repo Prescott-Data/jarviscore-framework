@@ -132,6 +132,19 @@ effects:
 | `match.target` | Glob over the target: a host and path (`browser`), artifact key, recipient, command, memory kind, step id |
 | `match.confined` | `true` or `false`: whether code ran in a confined child |
 
+Coder artifact collection accepts only regular files inside the sandbox's output
+workspace. Symbolic links, multiply linked files, linked output directories and
+paths outside the workspace are not published. Reads use no-follow directory
+and file descriptors, so replacing a path after the output snapshot cannot make
+the parent copy a different workspace's private file. Platforms without safe
+no-follow descriptor support refuse collection rather than reverting to ordinary
+path reads. Normal binary files retain their original bytes and storage handles.
+
+This protects collection, not application authorization: configure a distinct
+workspace and owner-scoped storage for private work. The default artifact prefix
+and an arbitrary storage backend do not provide tenant/person isolation or human
+disclosure approval.
+
 ---
 
 ## `scopes`: what each person may do in your organisation

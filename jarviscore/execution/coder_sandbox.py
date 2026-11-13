@@ -37,6 +37,7 @@ import socket
 import subprocess
 import sys
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -1454,12 +1455,55 @@ class CoderSandbox:
     })
 
     def _snapshot_output(self) -> Dict[str, float]:
-        """Modification times under output_dir, to tell apart what a run produced."""
+        """Modification times of regular, unlinked files inside the output root."""
+        import stat
+
         snapshot = {}
-        for path in self.output_dir.rglob("*"):
-            if path.is_file():
-                snapshot[str(path)] = path.stat().st_mtime_ns
+        try:
+            self.output_dir.absolute().relative_to(self.workspace.absolute())
+            self.output_dir.resolve().relative_to(self.workspace.resolve())
+            if self.output_dir.is_symlink():
+                return snapshot
+            for path in self.output_dir.rglob("*"):
+                info = path.lstat()
+                if stat.S_ISREG(info.st_mode) and info.st_nlink == 1:
+                    snapshot[str(path)] = info.st_mtime_ns
+        except (OSError, ValueError):
+            pass
         return snapshot
+
+    def _read_artifact(self, path: Path) -> bytes:
+        with self._open_artifact(path) as artifact:
+            return artifact.read()
+
+    @contextmanager
+    def _open_artifact(self, path: Path):
+        """Open through no-follow directory descriptors, not a model-controlled link."""
+        import stat
+
+        path.absolute().relative_to(self.output_dir.absolute())
+        relative = path.absolute().relative_to(self.workspace.absolute())
+        if not relative.parts or any(part in (".", "..") for part in relative.parts):
+            raise ValueError("Artifact path escapes its output workspace")
+        if not hasattr(os, "O_NOFOLLOW") or os.open not in os.supports_dir_fd:
+            raise OSError("Safe artifact reads are unavailable on this platform")
+        directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+        descriptors = [os.open(self.workspace.absolute(), directory_flags)]
+        try:
+            for part in relative.parts[:-1]:
+                descriptors.append(os.open(part, directory_flags, dir_fd=descriptors[-1]))
+            descriptor = os.open(
+                relative.parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                dir_fd=descriptors[-1],
+            )
+            with os.fdopen(descriptor, "rb") as artifact:
+                info = os.fstat(artifact.fileno())
+                if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                    raise ValueError("Artifacts must be regular files without links")
+                yield artifact
+        finally:
+            for descriptor in reversed(descriptors):
+                os.close(descriptor)
 
     async def _collect_artifacts(
         self, cr: "CoderResult", before: Dict[str, float], context: Optional[Dict] = None,
@@ -1479,17 +1523,22 @@ class CoderSandbox:
 
         for path in sorted(produced):
             local = Path(path)
+            try:
+                with self._open_artifact(local) as artifact:
+                    size = os.fstat(artifact.fileno()).st_size
+                    payload = artifact.read() if self.blob_storage is not None else None
+            except (OSError, ValueError):
+                continue
             record: Dict[str, Any] = {
                 "name": str(local.relative_to(self.output_dir)),
                 "path": str(local),
-                "bytes": local.stat().st_size,
+                "bytes": size,
                 "key": None,
             }
             if self.blob_storage is not None:
                 from jarviscore.control.effects import Effect, EffectDenied, content_digest, mediated
 
                 key = f"{self.artifact_prefix}/{record['name']}"
-                payload = local.read_bytes()
                 try:
                     with mediated(
                         Effect("artifact", "publish", target=key, origin=origin, attributes=content_digest(payload)),
