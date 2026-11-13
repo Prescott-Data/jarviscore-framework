@@ -188,6 +188,13 @@ existing restrictions on model-written mutations or unreviewed POST operations. 
 `tests/test_scope_headers.py` for effective-header, duplicate-value, shipped POST and model
 GET refusal-before-credentials regressions.
 
+Provider-wide endpoint limits can check `request_path` against exact full paths supplied
+in the person's scope terms. Unlike `path.<variable>`, this does not depend on a matching
+path template. A requirement matching the provider alone therefore holds every endpoint,
+including otherwise unmatched or legacy routes, to the same explicit selected-resource
+allow list. It does not grant extra methods or effects. See `tests/test_scope_request_path.py`
+for allowed-path and refusal-before-credentials regressions.
+
 Browser requests are intercepted, in report mode too, wherever a `sink: browser`
 requirement exists, so a refusal stops them. A page's own reads (`fetch`/XHR
 `GET`) are not decided on; its navigations and sends are.

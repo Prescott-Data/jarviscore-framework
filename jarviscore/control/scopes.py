@@ -469,7 +469,11 @@ def check_call(scopes: Scopes, facts: Facts, request, person: Holder, approver: 
         return None
     view = None
     if request is not None and not getattr(request, "opaque", False):
-        view = {**request.view(), "path": _path_values(applying, facts.path)}
+        view = {
+            **request.view(),
+            "path": _path_values(applying, facts.path),
+            "request_path": facts.path,
+        }
     for requirement in applying:
         check.requirements.append(requirement.name)
         if requirement.invalid:
