@@ -298,6 +298,15 @@ Legacy memory/tracing defaults remain unchanged. Rooms still take precedence ove
 `memory_scope_field` when memory is enabled; private source work must not inherit
 room context.
 
+`search_enabled=False` opts out of native search-client creation (default remains
+enabled). `using_private_logs(handler)` from `profiles.run_resources` routes native
+message and exception bodies to a trusted task-local logging handler, leaving only
+a redacted record in ordinary sinks. Outside that scope, ordinary logging is
+unchanged. Concurrent task/thread contexts retain their own handler. This uses the
+public logging record factory: Python attaches `extra` fields afterward, so arbitrary
+source-bearing `extra` fields are **not** protected and must not be used. The caller
+owns and closes the private handler after all run work/cleanup settles.
+
 Tests: `tests/test_autoagent_run_resources.py`, plus existing AutoAgent/kernel
 contracts. They use simulated model/auth/transport boundaries, not live provider
 acceptance. This SDK source remains unpublished; no installed runtime or

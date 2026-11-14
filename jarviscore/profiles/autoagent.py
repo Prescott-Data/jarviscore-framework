@@ -374,7 +374,7 @@ class AutoAgent(Profile):
 
         # 2. Initialize search (zero-config)
         self._logger.info("Initializing internet search...")
-        self.search = create_search_client()
+        self.search = create_search_client() if config.get("search_enabled", True) else None
 
         # 3. Initialize code generator (with search injection)
         self._logger.info("Initializing code generator...")
