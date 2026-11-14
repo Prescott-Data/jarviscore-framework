@@ -1681,6 +1681,7 @@ def create_coder_sandbox(
     allowed_commands: Optional[set[str]] = None,
     command_environment: Optional[Dict[str, str]] = None,
     allow_unsafe_local_execution: bool = False,
+    output_subdir: str = runtime_path("output"),
 ) -> CoderSandbox:
     """
     Create a CoderSandbox scoped to the given workspace directory.
@@ -1699,6 +1700,7 @@ def create_coder_sandbox(
     """
     return CoderSandbox(
         workspace_dir=workspace_dir,
+        output_subdir=output_subdir,
         timeout=timeout,
         bash_timeout=bash_timeout,
         nexus_call_proxy=nexus_call_proxy,

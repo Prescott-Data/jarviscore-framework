@@ -216,7 +216,28 @@ def journal_root() -> Optional[str]:
     return str(configured)
 
 
+from contextlib import contextmanager
+from contextvars import ContextVar
+
+_execution_journal = ContextVar("jarviscore_execution_journal", default=None)
+
+
+@contextmanager
+def using_journal(journal: Journal):
+    """Trusted execution-local journal, separate from deployment records."""
+    if not isinstance(journal, Journal):
+        raise TypeError("A native Journal is required")
+    token = _execution_journal.set(journal)
+    try:
+        yield
+    finally:
+        _execution_journal.reset(token)
+
+
 def current_journal() -> Optional[Journal]:
+    scoped = _execution_journal.get()
+    if scoped is not None:
+        return scoped
     global _journal, _journal_root
     root = journal_root()
     if root is None:

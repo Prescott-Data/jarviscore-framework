@@ -106,6 +106,7 @@ class TraceManager:
         trace_dir: str = DEFAULT_TRACE_DIR,
         redis_client=None,
         event_sink=None,
+        allow_redis_discovery: bool = True,
     ):
         self.workflow_id = workflow_id
         self.step_id = step_id
@@ -118,7 +119,7 @@ class TraceManager:
 
         # Redis — accept injected client or init from env
         self.redis_client = redis_client
-        if self.redis_client is None:
+        if self.redis_client is None and allow_redis_discovery:
             self.redis_client = self._init_redis()
 
         os.makedirs(trace_dir, exist_ok=True)

@@ -274,11 +274,32 @@ def _builtin_refusal(call: ProviderCall) -> Optional[Tuple[str, str]]:
 _cached: Optional[Tuple[Tuple[str, str, float], ControlPolicy]] = None
 
 
+from contextlib import contextmanager
+from contextvars import ContextVar
+
+_execution_policy = ContextVar("jarviscore_execution_policy", default=None)
+
+
+@contextmanager
+def using_policy(policy: ControlPolicy):
+    """Trusted execution-local policy; never changes the deployment default."""
+    if not isinstance(policy, ControlPolicy):
+        raise TypeError("A native ControlPolicy is required")
+    token = _execution_policy.set(policy)
+    try:
+        yield
+    finally:
+        _execution_policy.reset(token)
+
+
 def current_policy() -> ControlPolicy:
     """The deployment's policy: mode from settings, rules from ``control_policy_path``.
 
     Read again only when the mode, the path or the file's modification time changes.
     """
+    scoped = _execution_policy.get()
+    if scoped is not None:
+        return scoped
     global _cached
     import importlib
 

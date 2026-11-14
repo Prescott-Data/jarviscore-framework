@@ -72,6 +72,32 @@ def _pooled_client():
     return client
 
 
+class NexusHttpPool:
+    """An opt-in HTTP client owned by one native execution lifetime."""
+
+    def __init__(self):
+        self._client = None
+        self._loop = None
+        self._closed = False
+
+    def client(self):
+        loop = asyncio.get_running_loop()
+        if self._closed or self._loop is not None and self._loop is not loop:
+            raise RuntimeError("Native HTTP pool is closed or belongs to another loop")
+        self._loop = loop
+        if self._client is None:
+            factory = httpx.AsyncClient
+            self._client = (factory(limits=httpx.Limits(keepalive_expiry=_keepalive_seconds()))
+                            if factory is _HTTPX_CLIENT else factory())
+        return self._client
+
+    async def aclose(self):
+        if not self._closed:
+            self._closed = True
+            if self._client is not None:
+                await self._client.aclose()
+
+
 async def close_pooled_clients() -> None:
     """Close the provider connections this event loop holds; agent teardown calls it."""
     try:
@@ -338,7 +364,7 @@ class NexusCallProxy:
       with 401, returns the error response as-is and logs ATTENTION.
     """
 
-    def __init__(self, auth_manager, *, original_download_hosts=None):
+    def __init__(self, auth_manager, *, original_download_hosts=None, http_pool: NexusHttpPool | None = None):
         """
         Args:
             auth_manager: an AuthenticationManager, or a zero-argument callable
@@ -350,6 +376,7 @@ class NexusCallProxy:
                 copied at construction. Defaults to NEXUS_ORIGINAL_DOWNLOAD_HOSTS.
                 Never accept this configuration from a model or request payload.
         """
+        self._http_pool = http_pool
         self._auth_source = auth_manager
         if original_download_hosts is None:
             import importlib
@@ -357,6 +384,11 @@ class NexusCallProxy:
             settings = importlib.import_module("jarviscore.config.settings").settings
             original_download_hosts = getattr(settings, "nexus_original_download_hosts", {})
         self._original_download_hosts = downloads.exact_hosts(original_download_hosts)
+
+    async def aclose(self):
+        """Close only an explicitly owned pool; legacy clients remain mesh-owned."""
+        if self._http_pool is not None:
+            await self._http_pool.aclose()
 
     @property
     def _auth(self):
@@ -518,7 +550,7 @@ class NexusCallProxy:
         request_kwargs.setdefault("timeout", timeout)
         _record_source(provider)
 
-        client = _pooled_client()
+        client = self._http_pool.client() if self._http_pool is not None else _pooled_client()
         _record(journal, run, "effect.attempt", {"call_id": call_id}, strict)
         if grounding_rules and method.upper() not in ("GET", "HEAD", "OPTIONS"):
             from jarviscore.control.grounding import OBSERVATIONS

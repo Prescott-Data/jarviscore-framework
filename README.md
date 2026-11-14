@@ -257,3 +257,48 @@ enterprise modules have their own terms; see
 Building with JarvisCore? An optional
 [Built with JarvisCore](https://developers.prescottdata.io) credit on your About page
 or docs is appreciated; the [trademark policy](https://github.com/Prescott-Data/jarviscore-framework/blob/main/TRADEMARK.md) applies.
+
+
+### Opt-in private AutoAgent lifetimes (local source foundation)
+
+`AutoAgent(agent_id=None, *, run_resources=AutoAgentRunResources(...))` accepts
+trusted single-owner resources before native setup allocates defaults. Import
+`AutoAgentRunResources` from `jarviscore.profiles.run_resources`; supply separate
+`workspace_dir` and `log_directory`, native `nexus_call_proxy`, private
+`blob_storage`, optional `redis_store`, `artifact_prefix`, `config_overrides`, and
+an async `cleanup` callback. Native setup uses a new seeded registry (not the
+process directory cache), workspace-local `output`, and a run-specific result
+handler and kernel config. The resource bundle cannot be reused for another
+agent. Callers must validate private paths/permissions and authorize the principal;
+these resources grant no credential or data authority.
+
+An **already started** mesh exposes `async with mesh.isolated_agent(agent)` for
+one unregistered, single-lifetime AutoAgent. Native Mesh injects its existing auth
+manager (required for `requires_auth=True`) and native decisions client; it does
+not inject shared stores, rooms, peers, mailbox or HITL queues. This scope does not
+start/restart a mesh or create OAuth consent. Trusted execution must enter the
+native `act_for(OnBehalfOf(...))` context. Do not execute two tasks concurrently on
+one mutable AutoAgent; use a fresh agent/resources per run.
+
+`NexusCallProxy(..., http_pool=NexusHttpPool())` opts into an independently owned
+HTTP client. Proxy `aclose()` closes only that pool. Private AutoAgent teardown
+closes its resources, not the legacy event-loop pool. Cleanup is awaited to
+completion before caller cancellation propagates and on setup failure; failures
+in earlier teardown components cannot skip owned cleanup. Default AutoAgent
+setup and teardown remain unchanged when resources are omitted.
+
+`using_policy(ControlPolicy(...))` and `using_journal(Journal(...))` are trusted
+execution-local context managers in `control.policy` and `evidence.journal`.
+They do not mutate process settings. A caller can enforce native selected-resource
+scopes and retain a private journal, then close its own journal after work.
+For private execution, `memory_enabled=False` disables persistent memory creation,
+including ambient Athena; `telemetry_redis_discovery=False` prevents native tracing
+from discovering shared Redis. Supply `telemetry_trace_dir` under the private run.
+Legacy memory/tracing defaults remain unchanged. Rooms still take precedence over
+`memory_scope_field` when memory is enabled; private source work must not inherit
+room context.
+
+Tests: `tests/test_autoagent_run_resources.py`, plus existing AutoAgent/kernel
+contracts. They use simulated model/auth/transport boundaries, not live provider
+acceptance. This SDK source remains unpublished; no installed runtime or
+production dependency pin is changed by this foundation.

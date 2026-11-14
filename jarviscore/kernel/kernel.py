@@ -1141,6 +1141,8 @@ class Kernel:
         Returns None if neither Redis nor blob storage is available.
         Graceful degradation — the OODA loop works without memory.
         """
+        if not self.config.get("memory_enabled", True):
+            return None
         try:
             from jarviscore.memory.unified import UnifiedMemory
             if self.redis_store or self.blob_storage:
@@ -1378,6 +1380,7 @@ class Kernel:
                 step_id=step_id,
                 trace_dir=self.config.get("telemetry_trace_dir") or DEFAULT_TRACE_DIR,
                 event_sink=trace_sink,
+                allow_redis_discovery=bool(self.config.get("telemetry_redis_discovery", True)),
             )
         except Exception as _te:
             logger.debug("[Kernel] TraceManager init failed (non-fatal): %s", _te)

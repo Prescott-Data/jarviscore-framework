@@ -186,8 +186,15 @@ class AutoAgent(Profile):
     #         requires_auth = True   # Mesh injects _auth_manager before first task
     requires_auth: bool = False
 
-    def __init__(self, agent_id=None):
+    def __init__(self, agent_id=None, *, run_resources=None):
         super().__init__(agent_id)
+        from jarviscore.profiles.run_resources import AutoAgentRunResources
+        if run_resources is not None:
+            if not isinstance(run_resources, AutoAgentRunResources):
+                raise TypeError("run_resources must be AutoAgentRunResources")
+            run_resources.claim(self)
+        self._run_resources = run_resources
+        self._run_teardown_task = None
 
         if not self.system_prompt:
             raise ValueError(
@@ -269,7 +276,23 @@ class AutoAgent(Profile):
             context=context or None,
         )
 
+    def _execution_config(self):
+        base = self._mesh.config if self._mesh else {}
+        resources = getattr(self, "_run_resources", None)
+        return resources.config(base) if resources is not None else base
+
     async def setup(self):
+        try:
+            await self._setup_native()
+        except BaseException:
+            if getattr(self, "_run_resources", None) is not None:
+                try:
+                    await self.teardown()
+                except BaseException:
+                    self._logger.warning("Owned setup cleanup failed", exc_info=True)
+            raise
+
+    async def _setup_native(self):
         """
         Initialize LLM and execution components with ZERO CONFIG.
 
@@ -282,6 +305,11 @@ class AutoAgent(Profile):
         - Kernel: production routing pipeline
         - AgentProfile: role intelligence injected into system prompt
         """
+        resources = getattr(self, "_run_resources", None)
+        if resources is not None:
+            self._redis_store = resources.redis_store
+            self._blob_storage = resources.blob_storage
+            self._athena_client = None
         await super().setup()
 
         self._logger.info(f"AutoAgent setup: {self.agent_id}")
@@ -293,7 +321,7 @@ class AutoAgent(Profile):
 
 
         # Get config from mesh (or use empty dict)
-        config = self._mesh.config if self._mesh else {}
+        config = self._execution_config()
         rag_provider = str(config.get("rag_decision_provider", "vector")).lower()
         if rag_provider not in {"vector", "typesafe"}:
             raise ValueError(
@@ -357,8 +385,10 @@ class AutoAgent(Profile):
         self._logger.info(f"Initializing coder sandbox ({timeout}s timeout)...")
         # nexus_call() must work in gateway mode AND local-vault mode: the
         # proxy tries the gateway first and falls back to NexusLocalStore.
-        nexus_proxy = None
+        nexus_proxy = resources.nexus_call_proxy if resources is not None else None
         try:
+            if resources is not None:
+                raise LookupError("run owns its native proxy")
             if not getattr(self, "requires_auth", False):
                 # Credentials are for agents that declare they act on providers.
                 raise LookupError("agent does not declare requires_auth")
@@ -373,12 +403,14 @@ class AutoAgent(Profile):
             )
         except Exception as _nexus_exc:
             self._logger.debug("Nexus call proxy unavailable: %s", _nexus_exc)
+        sandbox_options = {"workspace_dir": resources.workspace_dir, "output_subdir": "output"} if resources is not None else {}
         self.sandbox = create_coder_sandbox(
+            **sandbox_options,
             timeout=timeout,
             nexus_call_proxy=nexus_proxy,
-            mesh_proxy=_AutoAgentMeshProxy(self),
+            mesh_proxy=None if resources is not None else _AutoAgentMeshProxy(self),
             blob_storage=getattr(self, '_blob_storage', None),
-            artifact_prefix=f"artifacts/{self.role}",
+            artifact_prefix=resources.artifact_prefix if resources is not None else f"artifacts/{self.role}",
             allow_unsafe_local_execution=bool(
                 config.get(
                     "allow_unsafe_local_execution",
@@ -405,7 +437,12 @@ class AutoAgent(Profile):
         # 7. Initialize function registry (graduated, reusable generated functions)
         registry_dir = f"{log_dir}/function_registry"
         self._logger.info(f"Initializing function registry (dir: {registry_dir})...")
-        self.code_registry = await asyncio.to_thread(shared_function_registry, registry_dir)
+        if resources is not None:
+            from jarviscore.execution.code_registry import create_function_registry
+            from jarviscore.profiles.run_resources import finish_cleanup
+            self.code_registry = await finish_cleanup(asyncio.to_thread(create_function_registry, registry_dir))
+        else:
+            self.code_registry = await asyncio.to_thread(shared_function_registry, registry_dir)
         # Confined code may read the registry but only registration may change it.
         self.sandbox.protected_paths = (Path(log_dir).resolve(),)
 
@@ -450,7 +487,7 @@ class AutoAgent(Profile):
         """Create the execution Kernel; products may override for custom roles."""
         from jarviscore.kernel.kernel import Kernel
 
-        config = self._mesh.config if self._mesh else {}
+        config = self._execution_config()
         return Kernel(
             llm_client=self.llm,
             sandbox=self.sandbox,
@@ -463,6 +500,21 @@ class AutoAgent(Profile):
         )
 
     async def teardown(self) -> None:
+        if getattr(self, "_run_resources", None) is None:
+            await self._teardown_native()
+            return
+        from jarviscore.profiles.run_resources import finish_cleanup
+        if self._run_teardown_task is None:
+            self._run_teardown_task = asyncio.create_task(self._teardown_owned())
+        await finish_cleanup(self._run_teardown_task)
+
+    async def _teardown_owned(self):
+        try:
+            await self._teardown_native()
+        finally:
+            await self._run_resources.aclose()
+
+    async def _teardown_native(self) -> None:
         """Release AutoAgent-owned runtime resources."""
         kernel = getattr(self, "_kernel", None)
         if kernel is not None and hasattr(kernel, "teardown"):
@@ -484,7 +536,9 @@ class AutoAgent(Profile):
                 self._logger.warning("[AutoAgent] LLM client close failed: %s", exc)
         from jarviscore.nexus.call_proxy import close_pooled_clients
 
-        await close_pooled_clients()
+        resources = getattr(self, "_run_resources", None)
+        if resources is None:
+            await close_pooled_clients()
         await super().teardown()
 
     def _load_agent_profile(self) -> None:
@@ -665,7 +719,7 @@ class AutoAgent(Profile):
                         ),
                     )
                 else:
-                    routing_config = self._mesh.config if self._mesh else {}
+                    routing_config = self._execution_config()
                     classifier = TaskComplexityClassifier(
                         self.llm,
                         decision_client=getattr(self, "decisions", None),

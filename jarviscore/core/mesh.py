@@ -30,6 +30,7 @@ Usage:
     await mesh.run_forever()         # Start run() loops for agents that have them
 """
 from typing import AsyncIterator, List, Dict, Any, Optional, Set
+from contextlib import asynccontextmanager
 import asyncio
 import copy
 import json
@@ -322,6 +323,32 @@ class Mesh:
         )
 
         return agent
+
+    @asynccontextmanager
+    async def isolated_agent(self, agent):
+        """Set up one unregistered, single-lifetime AutoAgent with native auth.
+
+        No shared room, mailbox, peers, HITL queue or storage is injected. The
+        trusted caller supplies per-run resources and the principal context.
+        """
+        from jarviscore.profiles.autoagent import AutoAgent
+        if not self._started or self._stopping:
+            raise RuntimeError("An already started mesh is required")
+        if not isinstance(agent, AutoAgent) or getattr(agent, "_run_resources", None) is None:
+            raise TypeError("An AutoAgent with owned run_resources is required")
+        if agent._mesh is not None:
+            raise RuntimeError("Isolated agents have a single mesh lifetime")
+        if getattr(agent, "requires_auth", False) and self._auth_manager is None:
+            raise RuntimeError("Native mesh auth manager is unavailable")
+        agent._mesh = self
+        agent.decisions = self._decision_client
+        if getattr(agent, "requires_auth", False):
+            agent._auth_manager = self._auth_manager
+        try:
+            await agent.setup()
+            yield agent
+        finally:
+            await agent.teardown()
 
     async def start(self):
         """
