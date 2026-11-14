@@ -514,6 +514,8 @@ class CoderSandbox:
     the DynamicStrategy via NexusCallProxy.
     """
 
+    supports_artifact_byte_budget = True
+
     def __init__(
         self,
         workspace_dir: Optional[Path] = None,
