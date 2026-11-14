@@ -1513,6 +1513,9 @@ class CoderSandbox:
         An agent that downloads a file has to be able to say what it produced
         and reach it again in a later run. Reporting is observed rather than
         declared, because code that forgets to list a file has still made one.
+        An integer storage max_bytes budget is checked before allocating a payload;
+        reads stay bounded if the opened file grows. Rejected files report an error
+        without a handle. This is not a disk quota.
         """
         after = self._snapshot_output()
         produced = [p for p, stamp in after.items() if before.get(p) != stamp]
@@ -1526,7 +1529,26 @@ class CoderSandbox:
             try:
                 with self._open_artifact(local) as artifact:
                     size = os.fstat(artifact.fileno()).st_size
-                    payload = artifact.read() if self.blob_storage is not None else None
+                    storage_limit = getattr(self.blob_storage, "max_bytes", None)
+                    bounded = type(storage_limit) is int and storage_limit >= 0
+                    too_large = bounded and size > storage_limit
+                    payload = None
+                    if self.blob_storage is not None and not too_large:
+                        payload = artifact.read(storage_limit + 1) if bounded else artifact.read()
+                        if bounded and len(payload) > storage_limit:
+                            too_large = True
+                            size = max(size, len(payload))
+                    if too_large:
+                        cr.artifacts.append(
+                            {
+                                "name": str(local.relative_to(self.output_dir)),
+                                "path": str(local),
+                                "bytes": size,
+                                "key": None,
+                                "error": "Artifact exceeds its storage byte budget",
+                            }
+                        )
+                        continue
             except (OSError, ValueError):
                 continue
             record: Dict[str, Any] = {

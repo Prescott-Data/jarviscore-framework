@@ -119,3 +119,74 @@ def test_artifact_read_rejects_hard_links(tmp_path):
     os.link(private, linked)
     with pytest.raises((OSError, ValueError)):
         sandbox._read_artifact(linked)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("size,limit", [(3, 2), (2, 2), (1, 0)])
+async def test_storage_budget_is_enforced_before_reading_artifact_bytes(
+    tmp_path,
+    monkeypatch,
+    size,
+    limit,
+):
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+
+    storage = Storage()
+    storage.max_bytes = limit
+    sandbox = CoderSandbox(tmp_path / "workspace", output_subdir="output", blob_storage=storage)
+    (sandbox.output_dir / "derived.bin").write_bytes(b"x" * size)
+    if size > limit:
+        original_open = sandbox._open_artifact
+
+        def forbidden_read():
+            pytest.fail("Oversized artifacts must not be allocated before storage rejects them")
+
+        @contextmanager
+        def metadata_only(path):
+            with original_open(path) as artifact:
+                yield SimpleNamespace(fileno=artifact.fileno, read=forbidden_read)
+
+        monkeypatch.setattr(sandbox, "_open_artifact", metadata_only)
+    result = CoderResult(success=True)
+    await sandbox._collect_artifacts(result, {})
+    if size > limit:
+        assert storage.saved == {}
+        assert result.artifacts[0]["key"] is None
+        assert result.artifacts[0]["bytes"] == size
+        assert "budget" in result.artifacts[0]["error"]
+    else:
+        assert storage.saved == {"artifacts/derived.bin": b"x" * size}
+
+
+@pytest.mark.asyncio
+async def test_artifact_growth_after_metadata_check_still_uses_a_bounded_read(
+    tmp_path, monkeypatch
+):
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+
+    storage = Storage()
+    storage.max_bytes = 2
+    sandbox = CoderSandbox(tmp_path / "workspace", output_subdir="output", blob_storage=storage)
+    path = sandbox.output_dir / "derived.bin"
+    path.write_bytes(b"x")
+    original_open = sandbox._open_artifact
+
+    @contextmanager
+    def growing_file(local):
+        with original_open(local) as artifact:
+
+            def grow_and_read(limit):
+                assert limit == 3
+                path.write_bytes(b"xxxxx")
+                return artifact.read(limit)
+
+            yield SimpleNamespace(fileno=artifact.fileno, read=grow_and_read)
+
+    monkeypatch.setattr(sandbox, "_open_artifact", growing_file)
+    result = CoderResult(success=True)
+    await sandbox._collect_artifacts(result, {})
+    assert storage.saved == {}
+    assert result.artifacts[0]["key"] is None
+    assert "budget" in result.artifacts[0]["error"]
