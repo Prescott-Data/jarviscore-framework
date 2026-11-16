@@ -2,7 +2,7 @@ ATOM_POLICY = {
     "effect": "write",
     "approval": "never",
     "idempotency_fields": ["summary", "start_datetime", "end_datetime", "calendar_id"],
-    "consequence": "Creates one Google Calendar event in the selected free slot.",
+    "consequence": "Creates one Google Calendar event in the selected free slot; guests are emailed the invitation.",
 }
 
 
@@ -10,9 +10,13 @@ async def google_calendar_create_event(summary: str, start_datetime: str, end_da
     """Calendar create event via the google_calendar API."""
     _h = {'Content-Type': 'application/json'}
     payload = {'summary': summary, 'description': description, 'location': location, 'start': {'dateTime': start_datetime, 'timeZone': 'Africa/Nairobi'}, 'end': {'dateTime': end_datetime, 'timeZone': 'Africa/Nairobi'}}
+    params = {}
     if attendees:
         payload['attendees'] = [{'email': e} for e in attendees]
-    resp = await nexus_call('POST', f'https://www.googleapis.com/calendar/v3/calendars/{calendar_id}/events', headers=_h, json=payload)
+        # Google emails guests only when asked: without sendUpdates the event lands on their
+        # calendars silently and nobody gets the invitation.
+        params['sendUpdates'] = 'all'
+    resp = await nexus_call('POST', f'https://www.googleapis.com/calendar/v3/calendars/{calendar_id}/events', headers=_h, params=params, json=payload)
     if not resp['ok']:
         return {'success': False, 'error': resp['body']}
     data = resp['json']
