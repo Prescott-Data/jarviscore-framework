@@ -31,6 +31,17 @@ All notable changes to JarvisCore Framework are documented here. This project fo
 
 ---
 
+## Unreleased
+
+### Fixed
+
+- **Standalone internet search imports.** Importing `InternetSearch` before the
+  Mesh or Kernel no longer enters a circular import through the default
+  researcher. Core helpers no longer eagerly load the Mesh; the public `Mesh`
+  and `MeshMode` exports remain available on first access.
+
+---
+
 <div class="changelog-release" markdown>
 
 ## 3.0.1 <span class="changelog-date">2026-10-27</span>
