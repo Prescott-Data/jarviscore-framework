@@ -210,10 +210,28 @@ TOKEN_PRICING = {
     "claude-opus-4": {"input": 15.00, "output": 75.00, "cached": 3.75},
     "claude-sonnet-4": {"input": 3.00, "output": 15.00, "cached": 0.75},
     "claude-haiku-3.5": {"input": 1.00, "output": 5.00, "cached": 0.25},
+    # The Claude 5 family (Anthropic first-party rates, October 2026)
+    "claude-fable-5-1": {"input": 10.00, "output": 50.00, "cached": 0.25},
+    "claude-opus-5-5": {"input": 4.00, "output": 20.00, "cached": 0.20},
+    "claude-opus-5": {"input": 5.00, "output": 25.00, "cached": 0.50},
+    "claude-sonnet-5-5": {"input": 2.00, "output": 10.00, "cached": 0.20},
+    "claude-sonnet-5": {"input": 2.00, "output": 10.00, "cached": 0.20},
+    "claude-haiku-5-5": {"input": 0.10, "output": 0.50, "cached": 0.01},
 }
 
 _DEFAULT_PRICING = {"input": 3.0, "output": 15.0}
 _UNPRICED_WARNED: set = set()
+
+
+# Claude models that refuse sampling parameters (`temperature` is a 400): Opus 4.7 and 4.8,
+# the 5 family (Opus, Sonnet, Haiku), Fable and Mythos, and later generations.
+_SAMPLING_REFUSED = re.compile(
+    r"claude-(?:opus-4-[7-9]|(?:opus|sonnet|haiku)-(?:[5-9]|\d\d)|fable|mythos)"
+)
+
+
+def _claude_accepts_sampling(model: str) -> bool:
+    return not _SAMPLING_REFUSED.search(model or "")
 
 
 def _call_cost(
@@ -1427,13 +1445,14 @@ class UnifiedLLMClient:
         request_kwargs = {
             "model": model,
             "max_tokens": max_tokens,
-            "temperature": temperature,
             "messages": conv_messages
         }
+        if _claude_accepts_sampling(model):
+            request_kwargs["temperature"] = temperature
         if tools:
             request_kwargs["tools"] = native_tools.anthropic_tools(tools)
             request_kwargs["tool_choice"] = native_tools.anthropic_tool_choice(
-                tool_choice, parallel_tool_calls
+                tool_choice, parallel_tool_calls, model
             )
 
         # Only add system if it exists (Claude API requires it to be string or not present)
