@@ -1,5 +1,12 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "required",
+    "idempotency_fields": ["payload"],
+    "consequence": "Records one contact payment in the connected Sage Business Cloud Accounting business, which changes its books.",
+}
+
 async def sage_business_cloud_accounting_create_payment(payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Create contact payment. Official: https://developer.sage.com/accounting/reference/"""
     try:

@@ -1,5 +1,12 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["bucket", "payload"],
+    "consequence": "Writes one object to the Amazon S3 bucket.",
+}
+
 async def amazon_s3_create_object(bucket: str, payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Upload object (PUT /{key}, SigV4). Official: https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutObject.html"""
     try:

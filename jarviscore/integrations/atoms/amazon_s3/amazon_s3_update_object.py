@@ -1,5 +1,12 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "required",
+    "idempotency_fields": ["bucket", "object_id", "payload"],
+    "consequence": "Replaces the whole content of one object in the Amazon S3 bucket; the previous content is lost unless the bucket keeps versions.",
+}
+
 async def amazon_s3_update_object(bucket: str, object_id: str, payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Replace object content (PUT /{key} — S3 has no PATCH; full overwrite). Official: https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutObject.html"""
     try:

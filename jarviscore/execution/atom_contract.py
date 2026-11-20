@@ -124,15 +124,27 @@ def _default(node: ast.expr) -> Any:
         return None
 
 
-def _performs_delete(
+_HTTP_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE"})
+
+
+def _methods_reached(
     fn: ast.FunctionDef | ast.AsyncFunctionDef,
     functions: dict[str, ast.FunctionDef | ast.AsyncFunctionDef],
     seen: Optional[set[str]] = None,
-) -> bool:
-    """Follow local helper calls from the atom entry point to HTTP DELETE."""
+) -> set[str]:
+    """The HTTP methods an atom can send, following its local helpers.
+
+    A method counts when it is written as a literal argument of the provider
+    call or of a local helper on the way to it: many atoms share a request
+    helper and name the method where they call it
+    (``await _request('POST', path, ...)``), so the provider call itself only
+    ever shows a variable. ``"*"`` is included when a provider call takes its
+    method from something this cannot follow. ``".delete"`` is included for a
+    call to a method named ``delete``.
+    """
     seen = set(seen or ())
     if fn.name in seen:
-        return False
+        return set()
     seen.add(fn.name)
     reachable_functions = dict(functions)
     reachable_functions.update({
@@ -140,6 +152,7 @@ def _performs_delete(
         for statement in fn.body
         if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef))
     })
+    parameters = {a.arg for a in [*fn.args.posonlyargs, *fn.args.args, *fn.args.kwonlyargs]}
 
     calls: list[ast.Call] = []
 
@@ -159,66 +172,53 @@ def _performs_delete(
         if not isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)):
             visitor.visit(statement)
 
+    def literal_methods(call: ast.Call) -> set[str]:
+        found = set()
+        for node in [*call.args, *(keyword.value for keyword in call.keywords)]:
+            value = _default(node)
+            if isinstance(value, str) and value.upper() in _HTTP_METHODS:
+                found.add(value.upper())
+        return found
+
+    reached: set[str] = set()
     for call in calls:
         name = call.func.id if isinstance(call.func, ast.Name) else None
-        if name == AUTH_CALL and call.args:
-            method = _default(call.args[0])
-            if isinstance(method, str) and method.upper() == "DELETE":
-                return True
         if isinstance(call.func, ast.Attribute) and call.func.attr.lower() == "delete":
-            return True
-        if name in reachable_functions and _performs_delete(
-            reachable_functions[name], reachable_functions, seen
-        ):
-            return True
-    return False
+            reached.add(".delete")
+        if name == AUTH_CALL:
+            method = call.args[0] if call.args else next(
+                (keyword.value for keyword in call.keywords if keyword.arg == "method"), None
+            )
+            # ``method.upper()`` is still the caller's method.
+            if (isinstance(method, ast.Call) and isinstance(method.func, ast.Attribute)
+                    and method.func.attr in {"upper", "strip"} and not method.args):
+                method = method.func.value
+            value = _default(method) if method is not None else None
+            if isinstance(value, str):
+                reached.add(value.upper())
+            elif not (isinstance(method, ast.Name) and method.id in parameters):
+                # Not a literal and not handed in by the caller, whose own literal is counted.
+                reached.add("*")
+        elif name in reachable_functions:
+            reached |= literal_methods(call)
+            reached |= _methods_reached(reachable_functions[name], reachable_functions, seen)
+    return reached
+
+
+def _performs_delete(
+    fn: ast.FunctionDef | ast.AsyncFunctionDef,
+    functions: dict[str, ast.FunctionDef | ast.AsyncFunctionDef],
+) -> bool:
+    """Whether the atom can send an HTTP DELETE, itself or through a local helper."""
+    return bool(_methods_reached(fn, functions) & {"DELETE", ".delete"})
 
 
 def _performs_http_mutation(
     fn: ast.FunctionDef | ast.AsyncFunctionDef,
     functions: dict[str, ast.FunctionDef | ast.AsyncFunctionDef],
-    seen: Optional[set[str]] = None,
 ) -> bool:
-    """Follow local helpers to a POST, PUT or PATCH provider call."""
-    seen = set(seen or ())
-    if fn.name in seen:
-        return False
-    seen.add(fn.name)
-    reachable_functions = dict(functions)
-    reachable_functions.update({
-        statement.name: statement
-        for statement in fn.body
-        if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef))
-    })
-    calls: list[ast.Call] = []
-
-    class Calls(ast.NodeVisitor):
-        def visit_FunctionDef(self, node):
-            return None
-
-        def visit_AsyncFunctionDef(self, node):
-            return None
-
-        def visit_Call(self, node):
-            calls.append(node)
-            self.generic_visit(node)
-
-    visitor = Calls()
-    for statement in fn.body:
-        if not isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            visitor.visit(statement)
-
-    for call in calls:
-        name = call.func.id if isinstance(call.func, ast.Name) else None
-        if name == AUTH_CALL and call.args:
-            method = _default(call.args[0])
-            if isinstance(method, str) and method.upper() in {"POST", "PUT", "PATCH"}:
-                return True
-        if name in reachable_functions and _performs_http_mutation(
-            reachable_functions[name], reachable_functions, seen
-        ):
-            return True
-    return False
+    """Whether the atom can send a POST, PUT or PATCH, or a method that cannot be told."""
+    return bool(_methods_reached(fn, functions) & {"POST", "PUT", "PATCH", "*"})
 
 
 def _declarative(statement: ast.stmt) -> bool:
