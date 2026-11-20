@@ -87,6 +87,24 @@ class ChatSurface:
         """Post ``text`` (``detail`` is quoted context, ``code`` is shown verbatim)."""
         raise NotImplementedError
 
+    async def show_item(self, thread: Optional[str], item: FeedItem, *, to: Optional[Person] = None,
+                        withheld: bool = False) -> str:
+        """Post one line of the room's feed: work that was asked for, each step
+        of it, how it ended, or a change to the room. ``item.kind`` says which
+        (the room event type; ``"progress"`` for a step, whose ``item.event`` is
+        the ledger entry; ``"surface.connected"`` for the hello when a room is
+        first shown here), so a surface can present kinds differently or
+        leave some out without reading the line's words. ``withheld`` asks for
+        the line everyone may see of work held for one person
+        (``item.withheld``); the full line then follows ``to`` that person.
+
+        Return "" to post nothing. By default, ``say`` with the item's text and
+        its detail as quoted context.
+        """
+        if withheld:
+            return await self.say(thread, item.withheld)
+        return await self.say(thread, item.text, detail=item.detail[:1500], to=to)
+
     async def notice(self, thread: Optional[str], text: str, *, to: Person) -> str:
         """A short private note to ``to`` (a refusal, "Cancelled."); it may be
         transient, such as a Slack ephemeral message. By default, ``say(to=)``."""
@@ -264,9 +282,10 @@ class RoomConversation:
             if not reason:
                 head = self.room.head()
                 files = len((await self.room.snapshot()).entries)
-                await self.surface.say(None, (
+                await self.surface.show_item(None, FeedItem(
                     f"The {self.room.id} room is connected here (version {head.version}, {files} files). "
-                    "Mention me with what you need; the work and its review happen in a thread."))
+                    "Mention me with what you need; the work and its review happen in a thread.",
+                    "surface.connected", time.time()))
         for record in self.store.pending_messages(self.room.key, self.surface.key):
             self._spawn(self.handle(record["message_id"]))
         # Work started before a restart is followed to its end and filed here.
@@ -458,17 +477,18 @@ class RoomConversation:
             if item.workflow_id:
                 self._remember("threads", f"wf:{item.workflow_id}", thread)
             if (item.event or {}).get("follows"):
-                return await self.surface.say(thread, item.text)
+                return await self.surface.show_item(thread, item)
             return thread  # the request itself is the thread
         if item.held_for:
-            posted = await self._once(key, "withheld", lambda: self.surface.say(thread, item.withheld))
+            posted = await self._once(key, "withheld", lambda: self.surface.show_item(
+                thread, item, withheld=True))
             asker = self._person(item.held_for)
             if asker is not None:
-                await self._once(key, "held", lambda: self.surface.say(
-                    thread or posted, item.text, detail=item.detail[:1500], to=asker))
+                await self._once(key, "held", lambda: self.surface.show_item(
+                    thread or posted or None, item, to=asker))
         else:
-            posted = await self.surface.say(thread, item.text, detail=item.detail[:1500])
-        if item.workflow_id and not thread:
+            posted = await self.surface.show_item(thread, item)
+        if item.workflow_id and not thread and posted:
             self._remember("threads", f"wf:{item.workflow_id}", posted)
         return posted
 

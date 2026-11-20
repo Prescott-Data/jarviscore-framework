@@ -42,6 +42,7 @@ class MySurface(ChatSurface):
     async def confirm(self, thread, decision, *, to) -> str: ...
 
     # Optional:
+    async def show_item(self, thread, item, *, to=None, withheld=False) -> str: ...  # default: say(...)
     async def notice(self, thread, text, *, to) -> str: ...          # default: say(..., to=to)
     async def show_approval(self, thread, question, *, to=None) -> str: ...  # default: say(...)
     async def show_connect(self, thread, request, *, to) -> str: ...       # default: say(..., to=to)
@@ -53,6 +54,7 @@ class MySurface(ChatSurface):
 | Method | Called to | Your surface |
 |---|---|---|
 | `say` | post a line of the room's work, the agent's reply, or a question from the agents | posts `text` in `thread` (None for the top level), with `detail` as quoted context and `code` verbatim. With `to`, shows it to that person only, durably |
+| `show_item` | post one line of the room's feed: work asked for, a step of it, how it ended, a change to the room | by default calls `say` with `item.text` and `item.detail`. Override it to present kinds differently or leave some out: `item.kind` is the room event type (`ask.started`, `ask.finished`, `ask.failed`, `member.changed`, ...) `progress` for a step, whose `item.event["event"]` names it (`dag_published`, `step_claimed`, `step_completed`, ...), or `surface.connected` for the hello when a room is first shown here. Return `""` to post nothing. With `withheld`, post `item.withheld` (the line everyone may see of work held for one person) |
 | `show_proposal` | show a proposal | posts `text` and the `diff` with **Accept** and **Full change** buttons; when `held`, shown `to` the person it is held for, with **Release** and **Discard** |
 | `confirm` | ask one person to confirm a decision the agent prepared | shows `decision["summary"]` to `to` alone, with **Confirm** and **Cancel**, whose target is `decision["id"]` |
 | `show_approval` | show an action the work waits on someone to approve | posts `question["title"]` (what it does) and `question["action"]` (exactly what runs), with `question["needs"]` (who may approve) and **Approve** and **Decline**, whose target is `question["id"]` |
