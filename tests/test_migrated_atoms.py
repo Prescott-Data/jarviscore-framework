@@ -649,3 +649,58 @@ class TestApolloAtoms:
 
         assert result["success"] is False
         assert calls == []
+
+
+CALENDAR_DELETE_ATOM = (
+    "jarviscore/integrations/atoms/google_calendar/google_calendar_delete_event.py"
+)
+
+
+class TestCalendarGuestsAreEmailed:
+    """Google's Calendar API emails guests only when the request says sendUpdates=all; the
+    default is silence, so an invite created through the atom reached guests' calendars
+    without the invitation email. Both writes now ask for the email."""
+
+    async def _run(self, path, name, params):
+        calls = []
+
+        async def nexus_call(method, url, **kwargs):
+            calls.append((method, url, kwargs))
+            return {"ok": True, "status_code": 200 if method == "POST" else 204,
+                    "json": {"id": "ev1", "htmlLink": "https://calendar/ev1"}, "body": "", "headers": {}}
+
+        source = open(path, encoding="utf-8").read()
+        atom = read_contract(source, system="google_calendar", expected_name=name).atom
+        namespace = {"nexus_call": nexus_call}
+        exec(f"{source}\n\n{invocation(atom, params)}", namespace)
+        return await namespace["main"](), calls
+
+    async def test_an_event_with_guests_sends_the_invitation(self):
+        result, calls = await self._run(
+            CALENDAR_CREATE_ATOM, "google_calendar_create_event",
+            {"summary": "Call", "start_datetime": "2026-11-17T19:00:00+03:00",
+             "end_datetime": "2026-11-17T20:00:00+03:00", "attendees": ["guest@example.com"]},
+        )
+        assert result["success"] and result["attendees"] == ["guest@example.com"]
+        method, url, kwargs = calls[0]
+        assert method == "POST" and url.endswith("/calendars/primary/events")
+        assert kwargs["params"] == {"sendUpdates": "all"}
+        assert kwargs["json"]["attendees"] == [{"email": "guest@example.com"}]
+
+    async def test_an_event_without_guests_asks_for_no_email(self):
+        _, calls = await self._run(
+            CALENDAR_CREATE_ATOM, "google_calendar_create_event",
+            {"summary": "Thinking time", "start_datetime": "2026-11-17T19:00:00+03:00",
+             "end_datetime": "2026-11-17T20:00:00+03:00"},
+        )
+        assert calls[0][2]["params"] == {}
+
+    async def test_a_deletion_sends_the_cancellation(self):
+        result, calls = await self._run(
+            CALENDAR_DELETE_ATOM, "google_calendar_delete_event", {"event_id": "ev1"}
+        )
+        assert result["deleted"] is True
+        method, url, kwargs = calls[0]
+        assert method == "DELETE" and url.endswith("/events/ev1")
+        assert kwargs["params"] == {"sendUpdates": "all"}
+
