@@ -211,6 +211,28 @@ class TestWorking:
         assert finished.detail == "Moved it to Wednesday."
         assert room.proposal(proposal).asked_by == "alice"
 
+    async def test_a_surface_chooses_what_it_shows_of_the_feed_by_kind(self, room, talk):
+        """`show_item` gets each feed line with its kind, so a surface leaves lines out
+        (or words them itself) without matching the line's text."""
+        shown = []
+
+        class Brief(MemorySurface):
+            async def show_item(self, thread, item, *, to=None, withheld=False):
+                shown.append(item.kind)
+                if item.kind != "ask.finished":
+                    return ""  # no plan, no steps, no request line
+                return await self.say(thread, f"Done: {item.detail}")
+
+        with_agents(room)
+        conversation, agent, surface = await talk(room, surface=Brief())
+        await room.ask("Move the announcement to Wednesday", asked_by=alice, workflow_id="wf-1")
+        await until(lambda: any(p.text.startswith("Done:") for p in surface.posts))
+
+        texts = [p.text for p in surface.posts if not p.proposal]
+        assert "Done: Moved it to Wednesday." in texts
+        assert not any("asked:" in t or "the agents finished" in t for t in texts)
+        assert {"ask.started", "ask.finished"} <= set(shown)
+
     async def test_feedback_redoes_the_proposal_with_the_persons_own_words(self, room, talk):
         asks = with_agents(room)
 
