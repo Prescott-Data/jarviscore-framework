@@ -232,6 +232,7 @@ class TestWorking:
         assert "Done: Moved it to Wednesday." in texts
         assert not any("asked:" in t or "the agents finished" in t for t in texts)
         assert {"ask.started", "ask.finished"} <= set(shown)
+        assert shown[0] == "surface.connected" and not any("connected here" in t for t in texts)
 
     async def test_feedback_redoes_the_proposal_with_the_persons_own_words(self, room, talk):
         asks = with_agents(room)
