@@ -1,5 +1,12 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["payload"],
+    "consequence": "Creates one Salesflare account.",
+}
+
 async def salesflare_create_account(payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Create account. Official: https://api.salesflare.com/docs"""
     try:

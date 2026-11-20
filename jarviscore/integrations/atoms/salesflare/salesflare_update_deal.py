@@ -1,5 +1,12 @@
 from typing import Any, Dict, List, Optional
 
+ATOM_POLICY = {
+    "effect": "write",
+    "approval": "never",
+    "idempotency_fields": ["deal_id", "payload"],
+    "consequence": "Updates one Salesflare opportunity.",
+}
+
 async def salesflare_update_deal(deal_id: str, payload: Dict[str, Any], timeout: int=30, verify_ssl: bool=True, base_url: str=None) -> dict:
     """Update opportunity. Official: https://api.salesflare.com/docs"""
     try:

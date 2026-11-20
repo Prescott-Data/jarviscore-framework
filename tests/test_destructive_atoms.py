@@ -244,3 +244,80 @@ async def test_an_application_guard_refuses_before_approval_or_execution():
     agent.effect_guards = (lambda *_: None,)
     waiting = await agent._atom_tool(atom.name)(message_id="m-1")
     assert waiting["typed_outcome"] == "WAITING_FOR_APPROVAL"
+
+
+HELPER = '''
+async def shop_{verb}_item(item: dict) -> dict:
+    """{verb} one item."""
+    return await _request({method!r}, "/items", item)
+
+
+async def _request(method, path, body):
+    return await nexus_call(method{upper}, "https://example.test" + path, json=body)
+'''
+
+
+@pytest.mark.parametrize("method", ["POST", "PUT", "PATCH", "post"])
+@pytest.mark.parametrize("upper", ["", ".upper()"])
+def test_a_mutation_sent_through_a_shared_request_helper_is_not_a_read(method, upper):
+    """Atoms often name the method where they call a shared helper, so the provider call
+    itself only shows a variable. The method is followed from the call to the helper."""
+    source = HELPER.format(verb="create", method=method, upper=upper)
+    contract = read_contract(source, system="shop", expected_name="shop_create_item")
+    assert not contract.ok
+    assert "require an explicit ATOM_POLICY" in contract.report()
+
+
+def test_a_read_through_a_shared_request_helper_stays_a_read():
+    source = HELPER.format(verb="get", method="GET", upper=".upper()")
+    contract = read_contract(source, system="shop", expected_name="shop_get_item")
+    assert contract.ok, contract.report()
+    assert contract.atom.policy.effect == "read"
+
+
+def test_a_delete_sent_through_a_shared_request_helper_needs_a_destructive_policy():
+    source = HELPER.format(verb="remove", method="DELETE", upper="")
+    contract = read_contract(source, system="shop", expected_name="shop_remove_item")
+    assert not contract.ok
+    assert "require a destructive ATOM_POLICY" in contract.report()
+
+
+def test_a_method_that_cannot_be_followed_is_never_assumed_to_be_a_read():
+    source = '''
+async def shop_sync_item(item: dict) -> dict:
+    """Sync one item."""
+    method = "POST" if item.get("new") else "GET"
+    return await nexus_call(method, "https://example.test/items", json=item)
+'''
+    contract = read_contract(source, system="shop", expected_name="shop_sync_item")
+    assert not contract.ok
+    assert "require an explicit ATOM_POLICY" in contract.report()
+
+
+def test_shipped_atoms_that_create_or_update_through_a_helper_declare_the_write():
+    """These reached POST or PUT through their request helper with no policy, so they were
+    offered as reads and ran without the approval their effect calls for."""
+    from jarviscore.execution.atom_contract import SHIPPED_ATOMS_DIR
+
+    checked = 0
+    for system, names in {
+        "sage_business_cloud_accounting": (
+            "create_contact", "update_contact", "create_invoice", "update_invoice",
+            "create_payment", "update_payment"),
+        "salesflare": (
+            "create_account", "create_contact", "create_deal",
+            "update_account", "update_contact", "update_deal"),
+        "amazon_s3": ("create_object", "update_object"),
+    }.items():
+        for name in names:
+            path = SHIPPED_ATOMS_DIR / system / f"{system}_{name}.py"
+            contract = read_contract(path.read_text(), system=system, expected_name=path.stem)
+            assert contract.ok, contract.report()
+            assert contract.atom.policy.effect == "write", path.stem
+            checked += 1
+    assert checked == 14
+    for money in ("create_invoice", "update_invoice", "create_payment", "update_payment"):
+        path = SHIPPED_ATOMS_DIR / "sage_business_cloud_accounting" / (
+            f"sage_business_cloud_accounting_{money}.py")
+        assert read_contract(path.read_text(), system="sage_business_cloud_accounting",
+                             expected_name=path.stem).atom.policy.requires_approval
