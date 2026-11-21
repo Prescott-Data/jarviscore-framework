@@ -649,3 +649,68 @@ class TestApolloAtoms:
 
         assert result["success"] is False
         assert calls == []
+
+
+class TestGmailGetMessage:
+    """The message's text wherever it sits, the text of an HTML-only message, and its links."""
+
+    @staticmethod
+    def b64(text):
+        import base64
+
+        return base64.urlsafe_b64encode(text.encode()).decode().rstrip("=")
+
+    async def read(self, payload):
+        name = "gmail_get_message"
+        with open(f"jarviscore/integrations/atoms/gmail/{name}.py", encoding="utf-8") as handle:
+            source = handle.read()
+        result = read_contract(source, system="gmail", expected_name=name)
+        assert result.ok, result.report()
+        assert result.atom.policy.effect == "read"
+
+        async def nexus_call(method, url, **kwargs):
+            assert method == "GET" and kwargs["params"] == {"format": "full"}
+            return {"ok": True, "status_code": 200, "json": {"payload": payload}, "body": ""}
+
+        namespace = {"nexus_call": nexus_call}
+        exec(f"{source}\n\n{invocation(result.atom, {'message_id': 'm1'})}", namespace)
+        return await namespace["main"]()
+
+    async def test_a_plain_message_reads_as_before(self):
+        out = await self.read({
+            "headers": [{"name": "Subject", "value": "LOI"}, {"name": "From", "value": "a@b.co"}],
+            "mimeType": "text/plain", "body": {"data": self.b64("See you at four.")},
+        })
+        assert out["success"] and out["subject"] == "LOI" and out["from"] == "a@b.co"
+        assert out["body"] == "See you at four." and out["links"] == []
+
+    async def test_an_html_only_message_is_returned_as_its_text_with_its_links(self):
+        """A report sent as HTML only came back with an empty body."""
+        html = ("<html><head><style>p{color:red}</style></head><body><h1>Meeting report</h1>"
+                "<p>Innocent to send the <b>deck</b>.</p><script>track()</script>"
+                "<p><a href='https://app.read.ai/r/1'>Open the  report</a></p></body></html>")
+        out = await self.read({"headers": [], "mimeType": "text/html", "body": {"data": self.b64(html)}})
+        assert "Meeting report" in out["body"] and "Innocent to send the deck." in out["body"]
+        assert "track()" not in out["body"] and "color:red" not in out["body"]
+        assert out["links"] == [{"text": "Open the report", "url": "https://app.read.ai/r/1"}]
+
+    async def test_text_nested_under_an_attachment_is_found_and_links_come_from_the_html(self):
+        """multipart/mixed holds multipart/alternative: the text is one level down. The plain
+        part words a link without its address; the address is in the HTML part."""
+        out = await self.read({
+            "headers": [], "mimeType": "multipart/mixed",
+            "parts": [
+                {"mimeType": "multipart/alternative", "parts": [
+                    {"mimeType": "text/plain", "body": {"data": self.b64("Open meeting notes")}},
+                    {"mimeType": "text/html", "body": {"data": self.b64(
+                        "<a href='https://docs.google.com/document/d/1'>Open meeting notes</a>"
+                        "<a href='https://docs.google.com/document/d/1'>again</a>"
+                        "<a href='javascript:void(0)'>x</a>")}},
+                ]},
+                {"mimeType": "application/pdf", "filename": "notes.pdf", "body": {"attachmentId": "a1"}},
+            ],
+        })
+        assert out["body"] == "Open meeting notes"  # the plain part is preferred
+        assert out["links"] == [
+            {"text": "Open meeting notes", "url": "https://docs.google.com/document/d/1"}]
+        assert out["attachments"] == ["notes.pdf"]
