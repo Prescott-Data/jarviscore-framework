@@ -742,7 +742,9 @@ async def test_claude_carries_tool_use_and_tool_results():
     )
 
     sent = create.call_args.kwargs
-    assert sent["system"] == "system"
+    # a tool loop's request marks what the next turn repeats, for Anthropic's prompt cache
+    assert sent["system"] == [
+        {"type": "text", "text": "system", "cache_control": {"type": "ephemeral"}}]
     assert sent["tools"][0]["input_schema"]["properties"] == {"query": {"type": "string"}}
     assert sent["tool_choice"] == {"type": "any", "disable_parallel_tool_use": True}
     assistant, result_turn = sent["messages"][1], sent["messages"][2]

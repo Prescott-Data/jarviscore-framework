@@ -150,6 +150,12 @@ class Settings(BaseSettings):
     # (stop_reason "refusal"; benign work trips the classifiers too). Unset: the declined
     # turn is returned as it is. e.g. CLAUDE_REFUSAL_FALLBACK_MODEL=claude-opus-4-8
     claude_refusal_fallback_model: Optional[str] = None
+    # Ask Anthropic to cache the part of a tool loop's request that the next turn repeats;
+    # it caches only where asked. A cached read is billed at a fraction of the input price,
+    # a write a quarter above it. "system": the tools and system prompt, the same on every
+    # turn. "conversation": also the conversation up to its last tool result, which pays
+    # only where each request extends the last unchanged. "off": no marks.
+    claude_prompt_cache: str = "system"
     anthropic_api_key: Optional[str] = None  # Alias for claude_api_key
 
     # Azure OpenAI

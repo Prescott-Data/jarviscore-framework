@@ -236,9 +236,15 @@ def _claude_accepts_sampling(model: str) -> bool:
 
 def _call_cost(
     model: str, input_tokens: int, output_tokens: int, cached_tokens: int = 0,
-    default: Optional[Dict[str, float]] = None,
+    default: Optional[Dict[str, float]] = None, cache_written_tokens: int = 0,
 ) -> Tuple[float, str]:
-    """A call's cost in USD and where its price came from: declared, builtin or default."""
+    """A call's cost in USD and where its price came from: declared, builtin or default.
+
+    ``cached_tokens`` are the input tokens served from the provider's cache, counted within
+    ``input_tokens``. ``cache_written_tokens`` are input tokens a provider charged extra to
+    store (Anthropic: 1.25x the input price, or the price's ``cache_write``), counted beside
+    ``input_tokens``, not within them.
+    """
     from jarviscore.config import settings
 
     declared = (getattr(settings, "llm_prices", None) or {}).get(model)
@@ -260,6 +266,8 @@ def _call_cost(
     cost = (
         (int(input_tokens or 0) - cached) * pricing["input"]
         + cached * cached_rate
+        + max(int(cache_written_tokens or 0), 0)
+        * pricing.get("cache_write", pricing["input"] * 1.25)
         + int(output_tokens or 0) * pricing["output"]
     ) / 1_000_000
     return cost, source
@@ -1441,6 +1449,17 @@ class UnifiedLLMClient:
         model = kwargs.pop('model', None) or self.config.get('claude_model', 'claude-sonnet-4')
         start_time = time.time()
 
+        # A request that offers tools is one turn of a loop whose next request repeats most
+        # of this one. Anthropic caches only where asked: mark the repeated part, and the
+        # next turn reads it at the cached price instead of paying for it again.
+        claude_tools = native_tools.anthropic_tools(tools) if tools else None
+        system_param: Any = system_msg
+        cache = str(self.config.get("claude_prompt_cache") or "system").lower()
+        if tools and cache in ("system", "conversation"):
+            system_param, conv_messages, claude_tools = native_tools.anthropic_cache_points(
+                system_msg, conv_messages, claude_tools, conversation=cache == "conversation",
+            )
+
         async def ask(model: str):
             request_kwargs = {
                 "model": model,
@@ -1450,13 +1469,13 @@ class UnifiedLLMClient:
             if _claude_accepts_sampling(model):
                 request_kwargs["temperature"] = temperature
             if tools:
-                request_kwargs["tools"] = native_tools.anthropic_tools(tools)
+                request_kwargs["tools"] = claude_tools
                 request_kwargs["tool_choice"] = native_tools.anthropic_tool_choice(
                     tool_choice, parallel_tool_calls, model
                 )
             # Only add system if it exists (Claude API requires it to be string or not present)
-            if system_msg:
-                request_kwargs["system"] = system_msg
+            if system_param:
+                request_kwargs["system"] = system_param
             return await asyncio.to_thread(self.claude_client.messages.create, **request_kwargs)
 
         response = await ask(model)
@@ -1490,17 +1509,20 @@ class UnifiedLLMClient:
             if getattr(block, "text", None)
         )
 
-        # Calculate cost; Claude's input_tokens excludes cache reads, which bill at the cached
-        # rate. Every attempt is counted: a declined one is billed for what it read and wrote.
+        # Calculate cost. Claude's input_tokens leaves out what was read from the cache (billed
+        # at the cached rate) and what was written to it (billed above the input rate); the
+        # input reported is all three, as other providers report it. Every attempt is counted:
+        # a declined one is billed for what it read and wrote.
         cost, price_source, tokens_in, tokens_out = 0.0, None, 0, 0
         for asked, answer in attempts:
             cache_reads = getattr(answer.usage, "cache_read_input_tokens", 0) or 0
+            cache_writes = getattr(answer.usage, "cache_creation_input_tokens", 0) or 0
             attempt_cost, price_source = _call_cost(
                 asked, answer.usage.input_tokens + cache_reads,
-                answer.usage.output_tokens, cache_reads,
+                answer.usage.output_tokens, cache_reads, cache_written_tokens=cache_writes,
             )
             cost += attempt_cost
-            tokens_in += answer.usage.input_tokens
+            tokens_in += answer.usage.input_tokens + cache_reads + cache_writes
             tokens_out += answer.usage.output_tokens
 
         return {
