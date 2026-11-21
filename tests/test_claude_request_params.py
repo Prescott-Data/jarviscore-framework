@@ -80,3 +80,60 @@ def test_claude_5_calls_are_priced():
 
     cost, source = _call_cost("claude-opus-5-5", 1_000_000, 1_000_000)
     assert source == "builtin" and cost == 24.0
+
+
+def _declining(config):
+    """A client whose first model declines; answers with what was asked and the result."""
+    asked = []
+
+    def create(**kwargs):
+        asked.append(kwargs)
+        if len(asked) == 1:
+            return SimpleNamespace(
+                content=[], usage=SimpleNamespace(input_tokens=1000, output_tokens=200),
+                stop_reason="refusal", stop_sequence=None,
+                stop_details=SimpleNamespace(category="reasoning_extraction"),
+            )
+        return SimpleNamespace(
+            content=[SimpleNamespace(text="Two mentions.")],
+            usage=SimpleNamespace(input_tokens=1000, output_tokens=50),
+            stop_reason="end_turn", stop_sequence=None,
+        )
+
+    client = UnifiedLLMClient.__new__(UnifiedLLMClient)
+    client.claude_client = SimpleNamespace(messages=SimpleNamespace(create=create))
+    client.config = config
+    tools = [{"type": "function", "function": {"name": "t", "description": "d",
+                                               "parameters": {"type": "object", "properties": {}}}}]
+    out = asyncio.run(client._call_claude(
+        [{"role": "system", "content": "s"}, {"role": "user", "content": "hi"}], 0.7, 50,
+        model="claude-opus-5-5", tools=tools, tool_choice="required", parallel_tool_calls=True,
+    ))
+    return asked, out
+
+
+def test_a_declined_request_is_asked_once_of_the_declared_fallback_model():
+    """A classifier decline is HTTP 200 with no content: to a caller, a model that said
+    nothing. The same request goes to the fallback, shaped for that model."""
+    asked, out = _declining({"claude_refusal_fallback_model": "claude-opus-4-8"})
+    assert [a["model"] for a in asked] == ["claude-opus-5-5", "claude-opus-4-8"]
+    first, second = asked
+    assert second["messages"] == first["messages"] and second["system"] == first["system"]
+    assert first["tool_choice"] == {"type": "auto"}  # 5.5 cannot be forced
+    assert second["tool_choice"] == {"type": "any"}  # 4.8 can: the caller asked for a call
+    assert out["content"] == "Two mentions." and out["finish_reason"] == "end_turn"
+    assert out["model"] == "claude-opus-4-8"
+    assert out["provider_metadata"]["declined"] == {
+        "model": "claude-opus-5-5", "category": "reasoning_extraction"}
+    # both attempts are counted: the declined one read the request too
+    assert out["tokens"] == {"input": 2000, "output": 250, "total": 2250}
+    assert out["cost_usd"] > 0
+
+
+def test_without_a_fallback_a_declined_request_is_returned_as_declined():
+    asked, out = _declining({})
+    assert len(asked) == 1
+    assert out["finish_reason"] == "refusal" and out["content"] == ""
+    assert out["provider_metadata"]["declined"]["category"] == "reasoning_extraction"
+    asked, out = _declining({"claude_refusal_fallback_model": "claude-opus-5-5"})
+    assert len(asked) == 1  # the fallback is the model that declined: not asked again

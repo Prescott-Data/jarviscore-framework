@@ -146,6 +146,10 @@ class Settings(BaseSettings):
     claude_api_key: Optional[str] = None
     claude_endpoint: Optional[str] = None
     claude_model: str = "claude-sonnet-4"
+    # The model asked once more when a Claude model's safety classifier declines a request
+    # (stop_reason "refusal"; benign work trips the classifiers too). Unset: the declined
+    # turn is returned as it is. e.g. CLAUDE_REFUSAL_FALLBACK_MODEL=claude-opus-4-8
+    claude_refusal_fallback_model: Optional[str] = None
     anthropic_api_key: Optional[str] = None  # Alias for claude_api_key
 
     # Azure OpenAI
