@@ -13,6 +13,7 @@ native shape; the adapters in :mod:`jarviscore.execution.llm` call them.
 import base64
 import json
 import uuid
+import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from jarviscore.execution import multimodal
@@ -126,8 +127,61 @@ def anthropic_tools(tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     ]
 
 
-def anthropic_tool_choice(tool_choice: Any, parallel_tool_calls: Optional[bool]) -> Dict[str, Any]:
+_EPHEMERAL = {"type": "ephemeral"}
+
+
+def anthropic_cache_points(
+    system: Optional[str], turns: List[Dict[str, Any]], tools: List[Dict[str, Any]],
+    conversation: bool = False,
+) -> Tuple[Any, List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Mark where a tool loop's request repeats the one before, so Anthropic serves that
+    part from its prompt cache (it caches only where a request asks it to).
+
+    Always: the end of the system prompt, which with the tools before it is the same on
+    every turn. With ``conversation``: also the last tool result in the conversation, for
+    a caller whose every request extends the one before it unchanged (what follows the
+    last tool result, this turn's state, is not in the next request). A write is billed
+    above the input price, so marking a conversation that is rewritten between turns costs
+    more than it saves. The inputs are not changed; the marked copies are returned as
+    (system, turns, tools).
+    """
+    tools = list(tools)
+    marked_system: Any = system
+    if system:
+        marked_system = [{"type": "text", "text": system, "cache_control": dict(_EPHEMERAL)}]
+    elif tools:
+        tools[-1] = {**tools[-1], "cache_control": dict(_EPHEMERAL)}
+    turns = list(turns)
+    for at in range(len(turns) - 1, -1, -1) if conversation else ():
+        blocks = turns[at].get("content")
+        if not isinstance(blocks, list):
+            continue
+        last = next((i for i in range(len(blocks) - 1, -1, -1)
+                     if isinstance(blocks[i], dict) and blocks[i].get("type") == "tool_result"),
+                    None)
+        if last is not None:
+            blocks = list(blocks)
+            blocks[last] = {**blocks[last], "cache_control": dict(_EPHEMERAL)}
+            turns[at] = {**turns[at], "content": blocks}
+            break
+    return marked_system, turns, tools
+
+
+# Claude models that refuse forced tool use (`any` / `tool` is a 400): Opus and Sonnet 5.5,
+# Fable and Mythos 5.1, and later generations. They are asked with `auto`; a turn that answers
+# in text instead is a raw turn, which the Kernel already handles.
+_UNFORCEABLE_CLAUDE = re.compile(
+    r"claude-(?:(?:opus|sonnet)-5-(?:[5-9]|\d\d)|(?:fable|mythos)-5-(?:[1-9]|\d\d)"
+    r"|(?:opus|sonnet|haiku|fable|mythos)-(?:[6-9]|\d\d))"
+)
+
+
+def anthropic_tool_choice(
+    tool_choice: Any, parallel_tool_calls: Optional[bool], model: str = ""
+) -> Dict[str, Any]:
     choice = {"required": "any", "auto": "auto", "none": "none"}.get(tool_choice, "auto")
+    if choice == "any" and _UNFORCEABLE_CLAUDE.search(model or ""):
+        choice = "auto"
     selected: Dict[str, Any] = {"type": choice}
     if parallel_tool_calls is False and choice != "none":
         selected["disable_parallel_tool_use"] = True

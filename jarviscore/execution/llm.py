@@ -210,17 +210,41 @@ TOKEN_PRICING = {
     "claude-opus-4": {"input": 15.00, "output": 75.00, "cached": 3.75},
     "claude-sonnet-4": {"input": 3.00, "output": 15.00, "cached": 0.75},
     "claude-haiku-3.5": {"input": 1.00, "output": 5.00, "cached": 0.25},
+    # The Claude 5 family (Anthropic first-party rates, October 2026)
+    "claude-fable-5-1": {"input": 10.00, "output": 50.00, "cached": 0.25},
+    "claude-opus-5-5": {"input": 4.00, "output": 20.00, "cached": 0.20},
+    "claude-opus-5": {"input": 5.00, "output": 25.00, "cached": 0.50},
+    "claude-sonnet-5-5": {"input": 2.00, "output": 10.00, "cached": 0.20},
+    "claude-sonnet-5": {"input": 2.00, "output": 10.00, "cached": 0.20},
+    "claude-haiku-5-5": {"input": 0.10, "output": 0.50, "cached": 0.01},
 }
 
 _DEFAULT_PRICING = {"input": 3.0, "output": 15.0}
 _UNPRICED_WARNED: set = set()
 
 
+# Claude models that refuse sampling parameters (`temperature` is a 400): Opus 4.7 and 4.8,
+# the 5 family (Opus, Sonnet, Haiku), Fable and Mythos, and later generations.
+_SAMPLING_REFUSED = re.compile(
+    r"claude-(?:opus-4-[7-9]|(?:opus|sonnet|haiku)-(?:[5-9]|\d\d)|fable|mythos)"
+)
+
+
+def _claude_accepts_sampling(model: str) -> bool:
+    return not _SAMPLING_REFUSED.search(model or "")
+
+
 def _call_cost(
     model: str, input_tokens: int, output_tokens: int, cached_tokens: int = 0,
-    default: Optional[Dict[str, float]] = None,
+    default: Optional[Dict[str, float]] = None, cache_written_tokens: int = 0,
 ) -> Tuple[float, str]:
-    """A call's cost in USD and where its price came from: declared, builtin or default."""
+    """A call's cost in USD and where its price came from: declared, builtin or default.
+
+    ``cached_tokens`` are the input tokens served from the provider's cache, counted within
+    ``input_tokens``. ``cache_written_tokens`` are input tokens a provider charged extra to
+    store (Anthropic: 1.25x the input price, or the price's ``cache_write``), counted beside
+    ``input_tokens``, not within them.
+    """
     from jarviscore.config import settings
 
     declared = (getattr(settings, "llm_prices", None) or {}).get(model)
@@ -242,6 +266,8 @@ def _call_cost(
     cost = (
         (int(input_tokens or 0) - cached) * pricing["input"]
         + cached * cached_rate
+        + max(int(cache_written_tokens or 0), 0)
+        * pricing.get("cache_write", pricing["input"] * 1.25)
         + int(output_tokens or 0) * pricing["output"]
     ) / 1_000_000
     return cost, source
@@ -1423,27 +1449,59 @@ class UnifiedLLMClient:
         model = kwargs.pop('model', None) or self.config.get('claude_model', 'claude-sonnet-4')
         start_time = time.time()
 
-        # Prepare request kwargs
-        request_kwargs = {
-            "model": model,
-            "max_tokens": max_tokens,
-            "temperature": temperature,
-            "messages": conv_messages
-        }
-        if tools:
-            request_kwargs["tools"] = native_tools.anthropic_tools(tools)
-            request_kwargs["tool_choice"] = native_tools.anthropic_tool_choice(
-                tool_choice, parallel_tool_calls
+        # A request that offers tools is one turn of a loop whose next request repeats most
+        # of this one. Anthropic caches only where asked: mark the repeated part, and the
+        # next turn reads it at the cached price instead of paying for it again.
+        claude_tools = native_tools.anthropic_tools(tools) if tools else None
+        system_param: Any = system_msg
+        cache = str(self.config.get("claude_prompt_cache") or "system").lower()
+        if tools and cache in ("system", "conversation"):
+            system_param, conv_messages, claude_tools = native_tools.anthropic_cache_points(
+                system_msg, conv_messages, claude_tools, conversation=cache == "conversation",
             )
 
-        # Only add system if it exists (Claude API requires it to be string or not present)
-        if system_msg:
-            request_kwargs["system"] = system_msg
+        async def ask(model: str):
+            request_kwargs = {
+                "model": model,
+                "max_tokens": max_tokens,
+                "messages": conv_messages
+            }
+            if _claude_accepts_sampling(model):
+                request_kwargs["temperature"] = temperature
+            if tools:
+                request_kwargs["tools"] = claude_tools
+                request_kwargs["tool_choice"] = native_tools.anthropic_tool_choice(
+                    tool_choice, parallel_tool_calls, model
+                )
+            # Only add system if it exists (Claude API requires it to be string or not present)
+            if system_param:
+                request_kwargs["system"] = system_param
+            return await asyncio.to_thread(self.claude_client.messages.create, **request_kwargs)
 
-        response = await asyncio.to_thread(
-            self.claude_client.messages.create,
-            **request_kwargs
-        )
+        response = await ask(model)
+        attempts = [(model, response)]
+        # A safety classifier may decline a request: HTTP 200, stop_reason "refusal", no
+        # content, and a category (benign work trips them too). Returned as it is, a
+        # declined turn reads to the caller as a model that said nothing. Where a fallback
+        # model is declared, the same request is asked of it once.
+        declined: Optional[Dict[str, Any]] = None
+        if getattr(response, "stop_reason", None) == "refusal":
+            details = getattr(response, "stop_details", None)
+            declined = {"model": model, "category": getattr(details, "category", None)}
+            fallback = self.config.get("claude_refusal_fallback_model")
+            if fallback and fallback != model:
+                logger.warning(
+                    "[claude] %s declined the request (%s); asking %s",
+                    model, declined["category"] or "no category", fallback,
+                )
+                model = fallback
+                response = await ask(model)
+                attempts.append((model, response))
+            else:
+                logger.warning(
+                    "[claude] %s declined the request (%s) and no fallback model is declared "
+                    "(CLAUDE_REFUSAL_FALLBACK_MODEL)", model, declined["category"] or "no category",
+                )
 
         duration = time.time() - start_time
         content = "".join(
@@ -1451,12 +1509,21 @@ class UnifiedLLMClient:
             if getattr(block, "text", None)
         )
 
-        # Calculate cost; Claude's input_tokens excludes cache reads, which bill at the cached rate.
-        cache_reads = getattr(response.usage, "cache_read_input_tokens", 0) or 0
-        cost, price_source = _call_cost(
-            model, response.usage.input_tokens + cache_reads,
-            response.usage.output_tokens, cache_reads,
-        )
+        # Calculate cost. Claude's input_tokens leaves out what was read from the cache (billed
+        # at the cached rate) and what was written to it (billed above the input rate); the
+        # input reported is all three, as other providers report it. Every attempt is counted:
+        # a declined one is billed for what it read and wrote.
+        cost, price_source, tokens_in, tokens_out = 0.0, None, 0, 0
+        for asked, answer in attempts:
+            cache_reads = getattr(answer.usage, "cache_read_input_tokens", 0) or 0
+            cache_writes = getattr(answer.usage, "cache_creation_input_tokens", 0) or 0
+            attempt_cost, price_source = _call_cost(
+                asked, answer.usage.input_tokens + cache_reads,
+                answer.usage.output_tokens, cache_reads, cache_written_tokens=cache_writes,
+            )
+            cost += attempt_cost
+            tokens_in += answer.usage.input_tokens + cache_reads + cache_writes
+            tokens_out += answer.usage.output_tokens
 
         return {
             "content": content,
@@ -1467,12 +1534,13 @@ class UnifiedLLMClient:
                 stop_reason=getattr(response, "stop_reason", None),
                 stop_sequence=getattr(response, "stop_sequence", None),
                 usage=response.usage,
+                **({"declined": declined} if declined else {}),
             ),
             "tool_calls": native_tools.anthropic_calls(response.content),
             "tokens": {
-                "input": response.usage.input_tokens,
-                "output": response.usage.output_tokens,
-                "total": response.usage.input_tokens + response.usage.output_tokens
+                "input": tokens_in,
+                "output": tokens_out,
+                "total": tokens_in + tokens_out
             },
             "cost_usd": cost,
             "model": model,
