@@ -1441,28 +1441,48 @@ class UnifiedLLMClient:
         model = kwargs.pop('model', None) or self.config.get('claude_model', 'claude-sonnet-4')
         start_time = time.time()
 
-        # Prepare request kwargs
-        request_kwargs = {
-            "model": model,
-            "max_tokens": max_tokens,
-            "messages": conv_messages
-        }
-        if _claude_accepts_sampling(model):
-            request_kwargs["temperature"] = temperature
-        if tools:
-            request_kwargs["tools"] = native_tools.anthropic_tools(tools)
-            request_kwargs["tool_choice"] = native_tools.anthropic_tool_choice(
-                tool_choice, parallel_tool_calls, model
-            )
+        async def ask(model: str):
+            request_kwargs = {
+                "model": model,
+                "max_tokens": max_tokens,
+                "messages": conv_messages
+            }
+            if _claude_accepts_sampling(model):
+                request_kwargs["temperature"] = temperature
+            if tools:
+                request_kwargs["tools"] = native_tools.anthropic_tools(tools)
+                request_kwargs["tool_choice"] = native_tools.anthropic_tool_choice(
+                    tool_choice, parallel_tool_calls, model
+                )
+            # Only add system if it exists (Claude API requires it to be string or not present)
+            if system_msg:
+                request_kwargs["system"] = system_msg
+            return await asyncio.to_thread(self.claude_client.messages.create, **request_kwargs)
 
-        # Only add system if it exists (Claude API requires it to be string or not present)
-        if system_msg:
-            request_kwargs["system"] = system_msg
-
-        response = await asyncio.to_thread(
-            self.claude_client.messages.create,
-            **request_kwargs
-        )
+        response = await ask(model)
+        attempts = [(model, response)]
+        # A safety classifier may decline a request: HTTP 200, stop_reason "refusal", no
+        # content, and a category (benign work trips them too). Returned as it is, a
+        # declined turn reads to the caller as a model that said nothing. Where a fallback
+        # model is declared, the same request is asked of it once.
+        declined: Optional[Dict[str, Any]] = None
+        if getattr(response, "stop_reason", None) == "refusal":
+            details = getattr(response, "stop_details", None)
+            declined = {"model": model, "category": getattr(details, "category", None)}
+            fallback = self.config.get("claude_refusal_fallback_model")
+            if fallback and fallback != model:
+                logger.warning(
+                    "[claude] %s declined the request (%s); asking %s",
+                    model, declined["category"] or "no category", fallback,
+                )
+                model = fallback
+                response = await ask(model)
+                attempts.append((model, response))
+            else:
+                logger.warning(
+                    "[claude] %s declined the request (%s) and no fallback model is declared "
+                    "(CLAUDE_REFUSAL_FALLBACK_MODEL)", model, declined["category"] or "no category",
+                )
 
         duration = time.time() - start_time
         content = "".join(
@@ -1470,12 +1490,18 @@ class UnifiedLLMClient:
             if getattr(block, "text", None)
         )
 
-        # Calculate cost; Claude's input_tokens excludes cache reads, which bill at the cached rate.
-        cache_reads = getattr(response.usage, "cache_read_input_tokens", 0) or 0
-        cost, price_source = _call_cost(
-            model, response.usage.input_tokens + cache_reads,
-            response.usage.output_tokens, cache_reads,
-        )
+        # Calculate cost; Claude's input_tokens excludes cache reads, which bill at the cached
+        # rate. Every attempt is counted: a declined one is billed for what it read and wrote.
+        cost, price_source, tokens_in, tokens_out = 0.0, None, 0, 0
+        for asked, answer in attempts:
+            cache_reads = getattr(answer.usage, "cache_read_input_tokens", 0) or 0
+            attempt_cost, price_source = _call_cost(
+                asked, answer.usage.input_tokens + cache_reads,
+                answer.usage.output_tokens, cache_reads,
+            )
+            cost += attempt_cost
+            tokens_in += answer.usage.input_tokens
+            tokens_out += answer.usage.output_tokens
 
         return {
             "content": content,
@@ -1486,12 +1512,13 @@ class UnifiedLLMClient:
                 stop_reason=getattr(response, "stop_reason", None),
                 stop_sequence=getattr(response, "stop_sequence", None),
                 usage=response.usage,
+                **({"declined": declined} if declined else {}),
             ),
             "tool_calls": native_tools.anthropic_calls(response.content),
             "tokens": {
-                "input": response.usage.input_tokens,
-                "output": response.usage.output_tokens,
-                "total": response.usage.input_tokens + response.usage.output_tokens
+                "input": tokens_in,
+                "output": tokens_out,
+                "total": tokens_in + tokens_out
             },
             "cost_usd": cost,
             "model": model,
