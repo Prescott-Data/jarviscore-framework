@@ -455,8 +455,8 @@ class TestNativeToolTurns:
         assert result.payload == {}
         assert result.summary == "Nothing to hand on."
 
-    def test_a_long_result_reaches_the_agent_whole_and_once(self):
-        report = "row " * 5000 + "LAST ROW: 15 rejected"
+    def test_a_result_within_the_inline_limit_reaches_the_agent_whole_and_once(self):
+        report = "row " * 4000 + "LAST ROW: 15 rejected"
         llm = _NativeLLM([
             _call("search", {"query": "revenue"}),
             _call("done", {"summary": "Read it.", "result": {}}),
@@ -938,3 +938,85 @@ class TestEachPromptExtendsTheLast:
         assert "No receipt ids" in fields["summary"]["description"]
         # Said once, where done is called.
         assert "tool_receipt_id" not in llm.requests[0]["messages"][0]["content"]
+
+
+class _ReadingAgent(BaseSubAgent):
+    """Reads documents of any size, and fails on request."""
+
+    def __init__(self, llm, gate=lambda: (True, "")):
+        self._gate = gate
+        super().__init__(agent_id="reader", role="tester", llm_client=llm)
+
+    def get_system_prompt(self, *args, **kwargs) -> str:
+        return "system"
+
+    def setup_tools(self) -> None:
+        self.register_tool("read_document", self._read_document, "Read a document.")
+        self.register_tool("send", self._send, "Send the document on.")
+
+    async def _read_document(self, lines: int = 3) -> str:
+        return "\n".join(f"line {n}: the quarterly figure was {n * 7}" for n in range(lines))
+
+    async def _send(self, to: str = "") -> Dict[str, Any]:
+        return {"status": "error", "error": f"no route to {to}"}
+
+    def _can_complete(self, state, parsed):
+        return self._gate()
+
+
+class TestALongResultArrivesAsAPreviewInTheLoop:
+    """A long document is shown as its first part; the whole stays readable and searchable."""
+
+    def _run(self, replies, gate=lambda: (True, ""), turns=None):
+        llm = _NativeLLM(replies)
+        agent = _ReadingAgent(llm, gate=gate)
+        asyncio.run(agent.run(task="read the report", max_turns=turns or len(replies) + 2))
+        return agent, llm
+
+    def test_a_long_result_arrives_as_a_preview_and_stays_whole_in_the_ring(self):
+        agent, llm = self._run([
+            _call("read_document", {"lines": 4000}, call_id="c0"),
+            _call("read_turn_result", {"turn": 1, "offset": 4000}, call_id="c1"),
+            _call("search_turn_result", {"turn": 1, "query": "line 3999"}, call_id="c2"),
+        ])
+
+        whole = "\n".join(f"line {n}: the quarterly figure was {n * 7}" for n in range(4000))
+        # Retained as before: the result as the tool layer returned it, here in its envelope.
+        retained = str({"status": "success", "output": whole})
+        assert agent._current_state.internal_variables["_turn_results"] == {"1": retained}
+        shown = [m["content"] for m in llm.requests[-1]["messages"] if m["role"] == "tool"]
+        document, page, found = shown
+        assert whole[:4000] in document and whole[:4001] not in document
+        assert f"The whole result is {len(retained)} characters" in document
+        # The offset to read on from is where the preview ends in the retained text.
+        read_on = int(document.split('"offset": ')[1].split("}")[0])
+        assert retained[:read_on].endswith(repr(whole[:4000])[1:-1])
+        assert retained[read_on:].startswith(repr(whole[4000:4100])[1:-1])
+        assert 'search_turn_result with {"turn": 1, "query"' in document
+        assert len(document) < 5000
+        # A page of the retained result is shown whole: it is never itself previewed.
+        assert "PARTIAL RESULT" not in page
+        assert repr(retained[4000:24000])[1:-1] in page
+        assert "line 3999: the quarterly figure was 27993" in found
+        # What the document looked like when it arrived is what every later turn shows.
+        assert [m["content"] for m in llm.requests[1]["messages"] if m["role"] == "tool"] == [document]
+
+    def test_a_tool_declared_whole_is_shown_whole_whatever_its_size(self):
+        llm = _NativeLLM([_call("read_document", {"lines": 4000}, call_id="c0")])
+        agent = _ReadingAgent(llm)
+        agent.whole_observation_tools = frozenset({"read_document"})
+        asyncio.run(agent.run(task="read the report", max_turns=3))
+
+        shown = [m["content"] for m in llm.requests[-1]["messages"] if m["role"] == "tool"]
+        assert "PARTIAL RESULT" not in shown[0]
+        assert "line 3999: the quarterly figure was 27993" in shown[0]
+
+    def test_the_inline_limit_is_the_subagents_to_set(self):
+        llm = _NativeLLM([_call("read_document", {"lines": 10}, call_id="c0")])
+        agent = _ReadingAgent(llm)
+        agent.result_inline_limit, agent.result_preview = 100, 40
+        asyncio.run(agent.run(task="read the report", max_turns=3))
+
+        shown = [m["content"] for m in llm.requests[-1]["messages"] if m["role"] == "tool"][0]
+        assert "the first 40 characters are shown above" in shown
+

@@ -18,6 +18,9 @@ from jarviscore.kernel.subagent import (
     _TURN_RESULT_WINDOW,
     _observe,
     _READ_PAGE_LIMIT,
+    _RESULT_INLINE_LIMIT,
+    _RESULT_PREVIEW,
+    _as_it_arrives,
     _retain_turn_result,
 )
 
@@ -140,7 +143,138 @@ class TestReadTurnResult:
         assert _observe("read_turn_result", page, turn=6) == str(page)
 
 
+class TestSearchTurnResult:
+
+    @pytest.fixture
+    def minutes(self, agent, state_with_ring):
+        lines = [f"line {n}: nothing to report" for n in range(200)]
+        lines[50] = "line 50: the Board approved the budget"
+        lines[120] = "line 120: the BOARD deferred the hire"
+        text = "\n".join(lines)
+        _retain_turn_result(state_with_ring.internal_variables, 5, text)
+        return text
+
+    def test_a_match_comes_with_its_offset_and_two_lines_either_side(self, agent, minutes):
+        out = agent._tool_search_turn_result(turn=5, query="board")
+
+        assert out["status"] == "success"
+        assert out["total_matches"] == 2 and out["total_chars"] == len(minutes)
+        first, second = out["matches"]
+        assert minutes[first["offset"]:first["offset"] + 5] == "Board"
+        assert minutes[second["offset"]:second["offset"] + 5] == "BOARD"
+        assert first["context"].split("\n") == [
+            "line 48: nothing to report", "line 49: nothing to report",
+            "line 50: the Board approved the budget",
+            "line 51: nothing to report", "line 52: nothing to report",
+        ]
+        # The offset is one read_turn_result reads on from.
+        page = agent._tool_read_turn_result(turn=5, offset=second["offset"], length=14)
+        assert page["output"] == "BOARD deferred"
+
+    def test_matches_at_either_end_have_the_lines_there_are(self, agent, minutes):
+        assert agent._tool_search_turn_result(turn=5, query="line 0:")["matches"][0]["context"] == (
+            "line 0: nothing to report\nline 1: nothing to report\nline 2: nothing to report"
+        )
+        last = agent._tool_search_turn_result(turn=5, query="LINE 199")["matches"][0]["context"]
+        assert last.split("\n")[-1] == "line 199: nothing to report" and last.count("\n") == 2
+
+    def test_at_most_twenty_matches_and_the_whole_count(self, agent, minutes):
+        out = agent._tool_search_turn_result(turn=5, query="nothing to report")
+
+        assert out["total_matches"] == 198
+        assert len(out["matches"]) == 20
+        assert "the first 20 of 198 matches" in out["note"]
+
+    def test_the_query_is_plain_text_not_a_pattern(self, agent, state_with_ring):
+        _retain_turn_result(state_with_ring.internal_variables, 5, "cost (net): 4.5\ncost gross: 495")
+
+        out = agent._tool_search_turn_result(turn=5, query="(net): 4.5")
+
+        assert out["total_matches"] == 1 and out["matches"][0]["offset"] == 5
+        assert agent._tool_search_turn_result(turn=5, query="4.5|495")["total_matches"] == 0
+
+    def test_a_result_without_line_breaks_gives_bounded_context(self, agent, state_with_ring):
+        _retain_turn_result(state_with_ring.internal_variables, 5, "a" * 30_000 + "needle" + "b" * 30_000)
+
+        match = agent._tool_search_turn_result(turn=5, query="needle")["matches"][0]
+
+        assert match["offset"] == 30_000
+        assert "needle" in match["context"] and len(match["context"]) < 1000
+
+    def test_a_turn_not_retained_is_answered_as_read_turn_result_answers(self, agent, state_with_ring):
+        state_with_ring.internal_variables["_released_turn_results"] = {"1": "it was old"}
+        for turn in (1, 99):
+            assert agent._tool_search_turn_result(turn=turn, query="x") == (
+                agent._tool_read_turn_result(turn=turn)
+            )
+        assert "Retained turns: ['3', '4']" in agent._tool_search_turn_result(turn=99, query="x")["error"]
+
+    def test_an_empty_query_is_an_error(self, agent, state_with_ring):
+        assert agent._tool_search_turn_result(turn=3, query=" ")["status"] == "error"
+
+    def test_a_search_fits_the_view(self, agent, state_with_ring):
+        _retain_turn_result(state_with_ring.internal_variables, 5, "needle " * 100_000)
+
+        out = agent._tool_search_turn_result(turn=5, query="needle")
+
+        assert len(str(out)) < _READ_PAGE_LIMIT
+
+
+class TestALongResultArrivesAsAPreview:
+
+    def test_a_result_within_the_limit_is_untouched(self):
+        text = "y" * _RESULT_INLINE_LIMIT
+        assert _as_it_arrives(text, text, 7) is text
+
+    def test_a_longer_result_is_previewed_with_its_size_and_how_to_read_on(self):
+        text = "".join(f"row {n}\n" for n in range(5000))
+
+        shown = _as_it_arrives(text, text, 7)
+
+        assert shown.startswith(text[:_RESULT_PREVIEW] + "\n\n[PARTIAL RESULT: ")
+        assert f"the first {_RESULT_PREVIEW} characters are shown above" in shown
+        assert f"The whole result is {len(text)} characters" in shown
+        assert f'read_turn_result with {{"turn": 7, "offset": {_RESULT_PREVIEW}}}' in shown
+        assert 'search_turn_result with {"turn": 7, "query": "<text to find>"}' in shown
+
+    def test_a_result_retained_in_another_form_is_read_from_its_start(self):
+        text = "z" * 50_000
+
+        shown = _as_it_arrives(text, "something else entirely", 7)
+
+        assert 'read_turn_result with {"turn": 7}, which reads the retained copy from its start' in shown
+
+    def test_no_limit_shows_every_result_whole(self):
+        text = "y" * 50_000
+        assert _as_it_arrives(text, text, 7, inline_limit=0) is text
+
+    def test_the_defaults_are_the_settings(self):
+        from jarviscore.config.settings import Settings
+
+        assert Settings.model_fields["kernel_result_inline_limit"].default == 20000
+        assert Settings.model_fields["kernel_result_preview"].default == 4000
+
+    def test_the_kernel_hands_its_configured_limits_to_its_subagents(self):
+        from unittest.mock import MagicMock
+
+        from jarviscore.kernel.kernel import Kernel
+
+        kernel = Kernel(
+            llm_client=MagicMock(),
+            config={"kernel_result_inline_limit": 9000, "kernel_result_preview": 500},
+        )
+        subagent = kernel._create_subagent("researcher", "a1")
+        assert (subagent.result_inline_limit, subagent.result_preview) == (9000, 500)
+
+        plain = Kernel(llm_client=MagicMock(), config={})._create_subagent("researcher", "a1")
+        assert (plain.result_inline_limit, plain.result_preview) == (None, None)
+
+
 class TestToolRegistration:
+
+    def test_search_turn_result_is_registered_and_is_recall_not_action(self, agent):
+        assert "search_turn_result" in agent.tool_names
+        assert "search_turn_result" in THINKING_TOOLS
 
     def test_read_turn_result_is_auto_registered(self, agent):
         assert "read_turn_result" in agent.tool_names
