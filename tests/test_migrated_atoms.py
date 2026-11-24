@@ -695,6 +695,136 @@ class TestCalendarGuestsAreEmailed:
         )
         assert calls[0][2]["params"] == {}
 
+    async def test_a_video_call_asks_google_for_a_meet_link_and_returns_it(self):
+        calls = []
+
+        async def nexus_call(method, url, **kwargs):
+            calls.append((method, url, kwargs))
+            return {"ok": True, "status_code": 200, "body": "", "headers": {}, "json": {
+                "id": "ev1", "htmlLink": "https://calendar/ev1",
+                "hangoutLink": "https://meet.google.com/abc-defg-hij"}}
+
+        source = open(CALENDAR_CREATE_ATOM, encoding="utf-8").read()
+        atom = read_contract(
+            source, system="google_calendar", expected_name="google_calendar_create_event").atom
+        params = {"summary": "Call", "start_datetime": "2026-11-24T11:30:00-05:00",
+                  "end_datetime": "2026-11-24T12:00:00-05:00",
+                  "attendees": ["guest@example.com"], "video_call": True}
+        results = []
+        for _ in range(2):
+            namespace = {"nexus_call": nexus_call}
+            exec(f"{source}\n\n{invocation(atom, params)}", namespace)  # noqa: S102
+            results.append(await namespace["main"]())
+        assert results[0]["meet_link"] == "https://meet.google.com/abc-defg-hij"
+        kwargs = calls[0][2]
+        assert kwargs["params"] == {"sendUpdates": "all", "conferenceDataVersion": 1}
+        request = kwargs["json"]["conferenceData"]["createRequest"]
+        assert request["conferenceSolutionKey"] == {"type": "hangoutsMeet"}
+        # the same event asks under the same id: a call made again makes no second link
+        assert request["requestId"] == calls[1][2]["json"]["conferenceData"]["createRequest"]["requestId"]
+
+    async def test_without_a_video_call_no_conference_is_asked_for(self):
+        result, calls = await self._run(
+            CALENDAR_CREATE_ATOM, "google_calendar_create_event",
+            {"summary": "Call", "start_datetime": "2026-11-17T19:00:00+03:00",
+             "end_datetime": "2026-11-17T20:00:00+03:00"},
+        )
+        assert "conferenceData" not in calls[0][2]["json"] and "meet_link" not in result
+
+    async def test_a_time_with_its_offset_is_not_relabelled_and_a_zone_given_is_used(self):
+        _, calls = await self._run(
+            CALENDAR_CREATE_ATOM, "google_calendar_create_event",
+            {"summary": "Call", "start_datetime": "2026-11-24T11:30:00-05:00",
+             "end_datetime": "2026-11-24T12:00:00-05:00"},
+        )
+        assert calls[0][2]["json"]["start"] == {"dateTime": "2026-11-24T11:30:00-05:00"}
+        _, calls = await self._run(
+            CALENDAR_CREATE_ATOM, "google_calendar_create_event",
+            {"summary": "Call", "start_datetime": "2026-11-24T11:30:00-05:00",
+             "end_datetime": "2026-11-24T12:00:00-05:00", "time_zone": "America/New_York"},
+        )
+        assert calls[0][2]["json"]["end"]["timeZone"] == "America/New_York"
+        # a time with no offset is read in the zone given, and in no zone when none is:
+        # the atom used to assume Africa/Nairobi, a meeting at the wrong hour for anyone
+        # elsewhere
+        _, calls = await self._run(
+            CALENDAR_CREATE_ATOM, "google_calendar_create_event",
+            {"summary": "Call", "start_datetime": "2026-11-24T11:30:00",
+             "end_datetime": "2026-11-24T12:00:00", "time_zone": "Europe/London"},
+        )
+        assert calls[0][2]["json"]["start"] == {
+            "dateTime": "2026-11-24T11:30:00", "timeZone": "Europe/London"}
+        result, calls = await self._run(
+            CALENDAR_CREATE_ATOM, "google_calendar_create_event",
+            {"summary": "Call", "start_datetime": "2026-11-24T11:30:00",
+             "end_datetime": "2026-11-24T12:00:00"},
+        )
+        assert not result["success"] and "has no UTC offset" in result["error"]
+        assert calls == []
+        source = open(CALENDAR_CREATE_ATOM, encoding="utf-8").read()
+        assert "Nairobi" not in source
+
+    async def test_an_all_day_event_is_dates_and_ends_the_day_after_its_last(self):
+        result, calls = await self._run(
+            CALENDAR_CREATE_ATOM, "google_calendar_create_event",
+            {"summary": "Offsite", "start_datetime": "2026-11-24", "end_datetime": "2026-11-27"},
+        )
+        assert result["success"] and result["all_day"] is True
+        sent = calls[0][2]["json"]
+        assert sent["start"] == {"date": "2026-11-24"} and sent["end"] == {"date": "2026-11-27"}
+        for end in ("2026-11-24", "2026-11-24T12:00:00-05:00"):
+            result, calls = await self._run(
+                CALENDAR_CREATE_ATOM, "google_calendar_create_event",
+                {"summary": "Offsite", "start_datetime": "2026-11-24", "end_datetime": end},
+            )
+            assert not result["success"] and calls == []
+
+    async def test_an_event_that_repeats_carries_its_rule_and_needs_its_zone(self):
+        weekly = {"summary": "1:1", "start_datetime": "2026-11-24T10:00:00-05:00",
+                  "end_datetime": "2026-11-24T10:30:00-05:00",
+                  "recurrence": ["RRULE:FREQ=WEEKLY;BYDAY=TU;COUNT=10"]}
+        result, calls = await self._run(
+            CALENDAR_CREATE_ATOM, "google_calendar_create_event",
+            {**weekly, "time_zone": "America/New_York"},
+        )
+        sent = calls[0][2]["json"]
+        assert sent["recurrence"] == ["RRULE:FREQ=WEEKLY;BYDAY=TU;COUNT=10"]
+        assert sent["start"]["timeZone"] == "America/New_York"
+        assert result["recurrence"] == ["RRULE:FREQ=WEEKLY;BYDAY=TU;COUNT=10"]
+        result, calls = await self._run(
+            CALENDAR_CREATE_ATOM, "google_calendar_create_event", weekly)
+        assert not result["success"] and "needs time_zone" in result["error"] and calls == []
+        result, calls = await self._run(
+            CALENDAR_CREATE_ATOM, "google_calendar_create_event",
+            {**weekly, "time_zone": "America/New_York", "recurrence": ["every Tuesday"]},
+        )
+        assert not result["success"] and "not a recurrence rule" in result["error"]
+
+    async def test_reminders_are_set_only_when_asked(self):
+        base = {"summary": "Call", "start_datetime": "2026-11-24T11:30:00-05:00",
+                "end_datetime": "2026-11-24T12:00:00-05:00"}
+        _, calls = await self._run(CALENDAR_CREATE_ATOM, "google_calendar_create_event", base)
+        assert "reminders" not in calls[0][2]["json"]
+        _, calls = await self._run(
+            CALENDAR_CREATE_ATOM, "google_calendar_create_event",
+            {**base, "reminder_minutes": [10, 60]})
+        assert calls[0][2]["json"]["reminders"] == {"useDefault": False, "overrides": [
+            {"method": "popup", "minutes": 10}, {"method": "popup", "minutes": 60}]}
+        _, calls = await self._run(
+            CALENDAR_CREATE_ATOM, "google_calendar_create_event",
+            {**base, "reminder_minutes": []})
+        assert calls[0][2]["json"]["reminders"] == {"useDefault": False, "overrides": []}
+
+    def test_a_repeat_is_the_same_event_only_with_the_same_guests_and_link(self):
+        """The fields a second call is recognised by. With the guests and the Meet link
+        left out, creating the same slot again with a guest added was answered "already
+        ran" from the first call, and nobody was invited."""
+        source = open(CALENDAR_CREATE_ATOM, encoding="utf-8").read()
+        atom = read_contract(
+            source, system="google_calendar", expected_name="google_calendar_create_event").atom
+        assert {"attendees", "video_call", "recurrence"} <= set(atom.policy.idempotency_fields)
+        assert "free slot" not in atom.policy.consequence  # it checks no slot and claims none
+
     async def test_a_deletion_sends_the_cancellation(self):
         result, calls = await self._run(
             CALENDAR_DELETE_ATOM, "google_calendar_delete_event", {"event_id": "ev1"}
