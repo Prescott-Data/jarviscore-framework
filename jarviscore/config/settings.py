@@ -204,6 +204,11 @@ class Settings(BaseSettings):
     kernel_thinking_budget: int = 56000
     kernel_action_budget: int = 24000
     kernel_wall_clock_ms: int = 180000
+    # A tool result longer than the inline limit (characters) reaches the agent as a
+    # preview of its first characters; the whole is kept for read_turn_result and
+    # search_turn_result. 0 shows every result whole.
+    kernel_result_inline_limit: int = 20000
+    kernel_result_preview: int = 4000
     kernel_router_provider: str = "llm"
     # Let the router answer a task that needs no role (no tools, data or effects)
     # in the same call, when it runs on the model the communicator would use.

@@ -42,6 +42,7 @@ THINKING_TOOLS = frozenset({
     "read_mailbox",
     # Re-reading a retained tool result is recall, not action (issue #57).
     "read_turn_result",
+    "search_turn_result",
 })
 
 ACTION_TOOLS = frozenset({

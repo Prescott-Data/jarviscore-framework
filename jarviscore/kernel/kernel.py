@@ -1067,6 +1067,11 @@ class Kernel:
         else:
             raise ValueError(f"Unknown subagent role: {role}")
         subagent.workspace_root = getattr(self.sandbox, "workspace", None)
+        # How long a result may be before it arrives as a preview; unset, the settings decide.
+        for key, attr in (("kernel_result_inline_limit", "result_inline_limit"),
+                          ("kernel_result_preview", "result_preview")):
+            if self.config.get(key) is not None:
+                setattr(subagent, attr, int(self.config[key]))
         self._attach_mesh_tools(subagent)
         return subagent
 

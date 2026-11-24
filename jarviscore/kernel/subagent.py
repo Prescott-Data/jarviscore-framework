@@ -58,6 +58,7 @@ from abc import ABC, abstractmethod
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union, cast
 
+from jarviscore.config.settings import settings as _settings
 from jarviscore.context.truth import AgentOutput
 from jarviscore.execution import multimodal
 from jarviscore.kernel.cognition import AgentCognitionManager, FailureLedger
@@ -118,10 +119,24 @@ _CONVERSATION_WINDOW = 10
 # put between slides, so each prompt repeats the one before and is served from cache.
 _WINDOW_SLIDE = 5
 _TURN_RESULT_BUDGET = int(os.getenv("SUBAGENT_TURN_RESULT_BUDGET", "2000000"))
-# Characters of earlier tool results each prompt carries whole; the newest is always whole.
+# Characters of earlier tool results each prompt carries as they arrived; the newest is always kept.
 _THREAD_RESULT_BUDGET = int(os.getenv("SUBAGENT_THREAD_RESULT_BUDGET", "120000"))
 # read_turn_result pages are shown whole, so each page is sized to fit the agent's view.
 _READ_PAGE_LIMIT = int(os.getenv("SUBAGENT_READ_PAGE_LIMIT", "20000"))
+# A result longer than the inline limit arrives as a preview of its first characters; the
+# whole is retained and read a page at a time or searched. Shown in full, a long document
+# rode in every later prompt. Settings kernel_result_inline_limit and kernel_result_preview
+# (KERNEL_RESULT_INLINE_LIMIT, KERNEL_RESULT_PREVIEW); a subagent may carry its own.
+_RESULT_INLINE_LIMIT = int(_settings.kernel_result_inline_limit)
+_RESULT_PREVIEW = int(_settings.kernel_result_preview)
+# Matches search_turn_result returns, the lines of context around each, and the most
+# characters one match carries (a result without line breaks is one long line).
+_SEARCH_MATCH_LIMIT = 20
+_SEARCH_CONTEXT_LINES = 2
+_SEARCH_CONTEXT_CHARS = 400
+#: Tools that page through a retained result: their output is already sized to fit the
+#: view, is never previewed, and is not itself retained.
+_RETAINED_RESULT_READERS = frozenset({"read_turn_result", "search_turn_result"})
 
 
 def _retain_turn_result(internal_variables: Dict[str, Any], turn: int, text: str) -> None:
@@ -165,6 +180,44 @@ def _observe(tool_name: str, tool_result: Any, turn: int, whole: bool = True) ->
     ):
         return str(tool_result["output"])
     return str(tool_result)
+
+
+def _as_it_arrives(
+    result_str: str, retained: str, turn: int,
+    inline_limit: Optional[int] = None, preview: Optional[int] = None,
+) -> str:
+    """A result as the conversation carries it: whole, or its first characters when it is long.
+
+    Decided once, when the result arrives, and never changed afterwards. ``retained``
+    is the text read_turn_result and search_turn_result read: its size is the one stated,
+    and the offset to read on from is given where the preview can be placed in it (a
+    result in a success envelope is retained as the envelope, its text escaped).
+    """
+    inline_limit = _RESULT_INLINE_LIMIT if inline_limit is None else inline_limit
+    preview = _RESULT_PREVIEW if preview is None else preview
+    if inline_limit <= 0 or len(result_str) <= inline_limit:
+        return result_str
+    shown = result_str[:max(0, min(preview, inline_limit))]
+    escaped = repr(shown)[1:-1]
+    if retained.startswith(shown):
+        read_on = len(shown)
+    else:
+        at = retained[:len(escaped) + 64].find(escaped)
+        read_on = at + len(escaped) if at >= 0 else -1
+    if read_on >= 0:
+        rest = f'call read_turn_result with {{"turn": {turn}, "offset": {read_on}}}'
+    else:
+        rest = (
+            f'call read_turn_result with {{"turn": {turn}}}, which reads the retained copy '
+            "from its start"
+        )
+    return (
+        f"{shown}\n\n"
+        f"[PARTIAL RESULT: the first {len(shown)} characters are shown above. The whole result "
+        f"is {len(retained)} characters and is retained. To read the rest, {rest}, a page of "
+        f"up to {_READ_PAGE_LIMIT} characters at a time. To find something in it, call "
+        f'search_turn_result with {{"turn": {turn}, "query": "<text to find>"}}.]'
+    )
 
 
 def _canonical(value: Any) -> str:
@@ -301,7 +354,8 @@ _WORKFLOW_TOOLS = frozenset({"inspect_workflow", "read_workflow_step"})
 #: Tools a program never calls: finishing, memory, runtime and peer controls, and
 #: the coder's own code and workspace tools (a program already is code).
 _UNBRIDGED_TOOLS = frozenset({
-    "run_tool_program", "read_turn_result", "remember", "recall", "time_s", "is_actionable",
+    "run_tool_program", "read_turn_result", "search_turn_result", "remember", "recall",
+    "time_s", "is_actionable",
     "write_code", "execute_code", "validate_code", "register_function", "repair_atom",
     "inspect_atom_for_repair", "check_registry", "delegate_research", "evaluate_decisions",
     "workspace_list", "workspace_read", "workspace_search", "workspace_write",
@@ -570,8 +624,13 @@ class BaseSubAgent(ABC):
     #: what it did, before the call is stopped.
     tool_handback_s: float = float(os.getenv("SUBAGENT_TOOL_HANDBACK_S", "60"))
 
-    #: Tools whose results are the agent's perception and are shown whole, never clipped.
+    #: Tools whose results are the agent's perception and are shown whole, never clipped:
+    #: a result longer than the inline limit still arrives whole, not as a preview.
     whole_observation_tools: frozenset = frozenset()
+    #: Characters above which a result arrives as a preview, and the preview's length
+    #: (config kernel_result_inline_limit, kernel_result_preview). None: the defaults.
+    result_inline_limit: Optional[int] = None
+    result_preview: Optional[int] = None
     #: Perceptions of a changing world: a newer result replaces older ones in the agent's view.
     perception_tools: frozenset = frozenset()
     #: Registered and callable, but never offered to the model: runtime helpers that
@@ -707,17 +766,7 @@ class BaseSubAgent(ABC):
         ring = variables.get("_turn_results") or {}
         full = ring.get(str(turn))
         if full is None:
-            available = sorted(ring, key=int) if ring else []
-            released = (variables.get("_released_turn_results") or {}).get(str(turn))
-            why = (
-                f"Turn {turn}'s result was released because {released}; repeat that call "
-                "if you still need it."
-                if released else f"No retained result for turn {turn}."
-            )
-            return {
-                "status": "error",
-                "error": f"{why} Retained turns: {available or 'none'}.",
-            }
+            return self._turn_not_retained(turn, ring, variables)
         offset = max(0, int(offset))
         length = min(int(length) or _READ_PAGE_LIMIT, _READ_PAGE_LIMIT)
         chunk = full[offset:offset + length]
@@ -731,6 +780,68 @@ class BaseSubAgent(ABC):
             "output": chunk,
             **({"note": f'call again with {{"turn": {turn}, "offset": {offset + len(chunk)}}} for the rest'}
                if remaining else {}),
+        }
+
+    def _tool_search_turn_result(self, turn: int, query: str) -> Dict[str, Any]:
+        """Find text in the whole output of an earlier tool call (params: turn, query).
+
+        ``turn`` is the number in the result's [Turn N] label. The match is plain text,
+        whatever its case. Returns up to 20 matches, each with its character offset
+        (pass it to read_turn_result to read on from there) and the two lines either
+        side, and the total number of matches.
+        """
+        state = self._current_state
+        variables = state.internal_variables if state is not None else {}
+        ring = variables.get("_turn_results") or {}
+        full = ring.get(str(turn))
+        if full is None:
+            return self._turn_not_retained(turn, ring, variables)
+        query = str(query or "")
+        if not query.strip():
+            return {"status": "error", "error": "query is empty: give the text to find."}
+        offsets = [found.start() for found in re.finditer(re.escape(query), full, re.IGNORECASE)]
+        matches = []
+        for offset in offsets[:_SEARCH_MATCH_LIMIT]:
+            start = offset
+            for _ in range(_SEARCH_CONTEXT_LINES + 1):
+                start = full.rfind("\n", 0, start)
+                if start < 0:
+                    break
+            end = offset + len(query) - 1
+            for _ in range(_SEARCH_CONTEXT_LINES + 1):
+                end = full.find("\n", end + 1)
+                if end < 0:
+                    end = len(full)
+                    break
+            # Lines of a result without line breaks are as long as the result.
+            start = max(start + 1, offset - _SEARCH_CONTEXT_CHARS)
+            end = min(end, offset + len(query) + _SEARCH_CONTEXT_CHARS)
+            matches.append({"offset": offset, "context": full[start:end]})
+        return {
+            "status": "success",
+            "turn": turn,
+            "query": query,
+            "total_matches": len(offsets),
+            "total_chars": len(full),
+            "matches": matches,
+            **({"note": f"the first {len(matches)} of {len(offsets)} matches; a more specific "
+                        "query finds the rest"}
+               if len(offsets) > len(matches) else {}),
+        }
+
+    @staticmethod
+    def _turn_not_retained(turn: int, ring: Dict[str, str], variables: Dict[str, Any]) -> Dict[str, Any]:
+        """The answer when a turn's whole result is no longer kept, and why."""
+        available = sorted(ring, key=int) if ring else []
+        released = (variables.get("_released_turn_results") or {}).get(str(turn))
+        why = (
+            f"Turn {turn}'s result was released because {released}; repeat that call "
+            "if you still need it."
+            if released else f"No retained result for turn {turn}."
+        )
+        return {
+            "status": "error",
+            "error": f"{why} Retained turns: {available or 'none'}.",
         }
 
     @property
@@ -1209,7 +1320,10 @@ class BaseSubAgent(ABC):
                 "Your memory:",
                 f"  You see the task and at least your last {_CONVERSATION_WINDOW} exchanges; older ones",
                 "  leave your view a few at a time (read_turn_result shows an earlier result",
-                "  whole), and a long task may continue across several sittings. A runtime",
+                "  whole), and a long task may continue across several sittings. A long",
+                "  result arrives as its first part, marked PARTIAL RESULT: the whole is kept,",
+                "  read_turn_result reads it a page at a time and search_turn_result finds",
+                "  text in it. A runtime",
                 "  notice says when exchanges are about to leave: keep anything from them you",
                 "  will still need (a price, a constraint you checked, a decision) in",
                 "  working_notes, which every tool call accepts at no extra turn and which you",
@@ -1248,7 +1362,9 @@ class BaseSubAgent(ABC):
             f"  You see the task, your working notes and at least your last {_CONVERSATION_WINDOW} exchanges. Older",
             "  exchanges are gone from view, and a long task continues across several",
             "  sittings. A large earlier result may appear as a reference that",
-            "  read_turn_result shows whole again.",
+            "  read_turn_result shows whole again. A long result arrives as its first",
+            "  part, marked PARTIAL RESULT: the whole is kept, read_turn_result reads it",
+            "  a page at a time and search_turn_result finds text in it.",
             "  What you have established (a price, an option, a constraint you",
             "  checked, a page that has or lacks something, a decision) is kept only if",
             "  you write it on a NOTE: line. A note costs no turn: write it in the same",
@@ -2131,7 +2247,7 @@ class BaseSubAgent(ABC):
                 call = state.tool_results_recorded
 
                 # ── Retain the full result for honest retrieval (issue #57) ──
-                if tool_name != "read_turn_result":
+                if tool_name not in _RETAINED_RESULT_READERS:
                     _retain_turn_result(state.internal_variables, call, str(tool_result))
                 if tool_name not in _UNBRIDGED_TOOLS:
                     self._note_result_shape(tool_name, tool_result)
@@ -2203,6 +2319,20 @@ class BaseSubAgent(ABC):
                 result_str = _observe(
                     tool_name, tool_result, call, tool_name in self.whole_observation_tools
                 )
+                arrived = result_str
+                # A long result arrives as a preview; the whole is in the retention ring.
+                # A page or a search of a retained result is already sized to fit, and a
+                # tool declared in whole_observation_tools is the agent's view of the
+                # world, so those arrive whole.
+                if (
+                    tool_name not in _RETAINED_RESULT_READERS
+                    and tool_name not in self.whole_observation_tools
+                ):
+                    result_str = _as_it_arrives(
+                        result_str, str(tool_result), call,
+                        self.result_inline_limit, self.result_preview,
+                    )
+                previewed = result_str is not arrived
                 # Repeated in history on every later turn, so it carries only what the
                 # agent uses: which call, its receipt, and the result. The call it
                 # answers, tool name and arguments, sits right before it.
@@ -2225,8 +2355,9 @@ class BaseSubAgent(ABC):
                     ),
                     "reference": (
                         f"[Turn {call}] {turn_log['status']}, "
-                        f"receipt {tool_receipt.receipt_id}, {len(result_str)} characters, "
-                        "shown whole when it arrived. Read it whole again: call "
+                        f"receipt {tool_receipt.receipt_id}, {len(arrived)} characters, "
+                        f"shown {'in part' if previewed else 'whole'} when it arrived. "
+                        "Read it whole again: call "
                         f'read_turn_result with {{"turn": {call}}}'
                     ),
                 })
