@@ -1945,7 +1945,14 @@ capability; if one fails, report what failed.
             "read": {"read"},
             "propose": {"read"},
             "write": {"read", "write"},
-            "notify": {"read", "notify"},
+            # A step that reaches other people is offered the atoms that write as well:
+            # what reaches them is often a record that is created (a calendar event with
+            # guests emails the invitation; the atom that makes it declares "write").
+            # Offered only "notify" atoms, a step asked to send a calendar invitation
+            # found no tool that creates the event and said it could not be done. What an
+            # offered atom may do without the person's yes is the approval policy's to
+            # say, call by call; offering it grants nothing.
+            "notify": {"read", "write", "notify"},
             "destructive": {"read", "destructive"},
             "final_response": {"read"},
         }.get(requested_effect)
