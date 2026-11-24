@@ -198,7 +198,7 @@ async def google_calendar_list_events(calendar_id: str='primary') -> dict:
             )
             repaired_source = registry.get_function_code(
                 "google_calendar_list_events"
-            ).replace("'status': e.get('status'),", "'status': 'locally-repaired',")
+            ).replace('"status": e.get("status"),', '"status": "locally-repaired",')
             registry.register_function(
                 "google_calendar_list_events",
                 repaired_source,

@@ -295,14 +295,16 @@ class TestProviderIdentityAndContentAtoms:
             }
 
         namespace = {"nexus_call": nexus_call}
-        exec(f"{source}\n\n{invocation(atom, {})}", namespace)
+        period = {"time_min": "2026-09-11T00:00:00+03:00", "time_max": "2026-09-12T00:00:00+03:00"}
+        exec(f"{source}\n\n{invocation(atom, period)}", namespace)
         result = await namespace["main"]()
 
-        event = result["events"][0]
-        assert event["attendees"][0]["email"] == "ephy@example.com"
-        assert event["organizer"]["self"] is True
+        event = result["data"]["events"][0]
+        guest = event["guests"][0]
+        assert (guest["email"], guest["response"]) == ("ephy@example.com", "needsAction")
+        assert event["organizer"] == "owner@example.com" and event["organized_by_me"] is True
         assert event["status"] == "confirmed"
-        assert event["htmlLink"] == "https://calendar.test/event-1"
+        assert event["html_link"] == "https://calendar.test/event-1"
 
     async def test_drive_export_uses_workspace_export_endpoint(self):
         with open(DRIVE_EXPORT_ATOM, encoding="utf-8") as handle:
@@ -696,11 +698,27 @@ class TestCalendarGuestsAreEmailed:
         assert calls[0][2]["params"] == {}
 
     async def test_a_deletion_sends_the_cancellation(self):
-        result, calls = await self._run(
-            CALENDAR_DELETE_ATOM, "google_calendar_delete_event", {"event_id": "ev1"}
-        )
-        assert result["deleted"] is True
-        method, url, kwargs = calls[0]
+        calls = []
+
+        async def nexus_call(method, url, **kwargs):
+            calls.append((method, url, kwargs))
+            if method == "GET":  # the event is read first: it must be the one named
+                return {"ok": True, "status_code": 200, "body": "", "headers": {}, "json": {
+                    "id": "ev1", "summary": "Call", "organizer": {"self": True},
+                    "attendees": [{"email": "guest@example.com"}]}}
+            return {"ok": True, "status_code": 204, "json": None, "body": "", "headers": {}}
+
+        source = open(CALENDAR_DELETE_ATOM, encoding="utf-8").read()
+        atom = read_contract(
+            source, system="google_calendar", expected_name="google_calendar_delete_event").atom
+        namespace = {"nexus_call": nexus_call}
+        exec(  # noqa: S102 - the atom's own source, run as the sandbox runs it
+            f"{source}\n\n{invocation(atom, {'event_id': 'ev1', 'title': 'Call'})}", namespace)
+        result = await namespace["main"]()
+
+        assert result["data"]["cancelled"] is True
+        assert result["data"]["guests"] == ["guest@example.com"]
+        method, url, kwargs = calls[-1]
         assert method == "DELETE" and url.endswith("/events/ev1")
         assert kwargs["params"] == {"sendUpdates": "all"}
 
