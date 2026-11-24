@@ -100,6 +100,8 @@ These become important once you run more than two agents concurrently against a 
 |---|---|---|
 | `LLM_TIMEOUT` | `120.0` | Seconds before an LLM call times out. |
 | `LLM_CONNECT_TIMEOUT` | `10.0` | Seconds to establish the connection (TCP and TLS), separate from `LLM_TIMEOUT`. |
+| `CLAUDE_TIMEOUT` | `240.0` | Seconds a Claude request may take. The whole reply is waited for, thinking included, so this is longer than `LLM_TIMEOUT`. |
+| `CLAUDE_MAX_RETRIES` | `1` | Times the Anthropic SDK asks again after a timeout or a retryable error. |
 | `LLM_KEEPALIVE_SECONDS` | `120.0` | Seconds an idle provider connection is kept for the next call (Azure, Claude, the promotion endpoint and vLLM). The SDK default of 5 s is shorter than the tool work between agent turns, so most calls reconnected; keep this below your provider's idle timeout (Azure: 240 s). |
 | `LLM_PREWARM` | `true` | Open the primary provider's connection while an agent starts, so its first call skips the TCP and TLS handshake. Only a bare request to the provider's host is sent; a failed warm-up is ignored. |
 | `LLM_TEMPERATURE` | `0.7` | Sampling temperature for all providers. |

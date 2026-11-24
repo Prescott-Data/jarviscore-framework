@@ -74,6 +74,10 @@ class Settings(BaseSettings):
     llm_timeout: float = 120.0
     # Connecting (TCP + TLS) gets its own short limit; the SDK retries a failed connect.
     llm_connect_timeout: float = 10.0
+    # Claude's whole reply is waited for, thinking included, so its limit is longer; with
+    # none set the SDK waited ten minutes a try, three tries, on a request left unanswered.
+    claude_timeout: float = 240.0
+    claude_max_retries: int = 1
     # Seconds an idle provider connection is kept for the next call. The SDKs
     # default to 5 s, shorter than the tool work between agent turns, so most
     # calls paid a new TCP + TLS handshake (about 1 s to a distant region).
