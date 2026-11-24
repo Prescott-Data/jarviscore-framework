@@ -1177,3 +1177,16 @@ async def test_with_no_provider_configured_the_error_says_what_to_set():
     with pytest.raises(RuntimeError, match="No LLM provider is configured") as raised:
         await llm._generate_inner([{"role": "user", "content": "hi"}], 0.0, 100)
     assert "AZURE_API_KEY" in str(raised.value) and "jarviscore check" in str(raised.value)
+
+
+def test_the_claude_client_has_a_time_limit_and_one_retry():
+    """With no limit of its own the SDK waits 600 s a try and tries three times, so a
+    request the provider stopped answering held its caller for many minutes."""
+    client = UnifiedLLMClient(config={"claude_api_key": "test-key"}).claude_client
+    assert client.timeout.read == 240.0 and client.timeout.connect == 10.0
+    assert client.max_retries == 1
+
+    tuned = UnifiedLLMClient(config={
+        "claude_api_key": "test-key", "claude_timeout": 90, "claude_max_retries": 0,
+    }).claude_client
+    assert tuned.timeout.read == 90.0 and tuned.max_retries == 0

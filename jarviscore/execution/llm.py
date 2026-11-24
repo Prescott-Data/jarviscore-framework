@@ -461,15 +461,29 @@ class UnifiedLLMClient:
             if claude_key:
                 try:
                     claude_http = AnthropicHttpxClient(limits=_connection_limits(self.config))
+                    # The SDK's own limit is ten minutes a try and three tries: a request
+                    # the provider stopped answering held its caller that long, with
+                    # nothing to show. A whole reply is waited for here (no stream), so
+                    # the limit has to cover the longest one worth waiting for.
+                    claude_limits = {
+                        "timeout": httpx.Timeout(
+                            float(self.config.get("claude_timeout", 240.0)),
+                            connect=float(self.config.get("llm_connect_timeout", 10.0)),
+                        ),
+                        "max_retries": int(self.config.get("claude_max_retries", 1)),
+                    }
                     if claude_endpoint:
                         self.claude_client = Anthropic(
                             api_key=claude_key,
                             base_url=claude_endpoint,
                             http_client=claude_http,
+                            **claude_limits,
                         )
                         logger.info(f"✓ Claude provider available (fallback): {claude_endpoint}")
                     else:
-                        self.claude_client = Anthropic(api_key=claude_key, http_client=claude_http)
+                        self.claude_client = Anthropic(
+                            api_key=claude_key, http_client=claude_http, **claude_limits,
+                        )
                         logger.info("✓ Claude provider available (fallback)")
                     self.provider_order.append(LLMProvider.CLAUDE)
                 except Exception as e:
