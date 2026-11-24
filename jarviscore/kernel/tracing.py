@@ -211,8 +211,22 @@ class TraceManager:
     )
     _SECRET_PATTERN = re.compile(
         r"(authorization)\s*[:=]\s*bearer\s+[A-Za-z0-9\-._~+/]+=*|"
-        r"(access_token|refresh_token|id_token|api_key|secret|password|token)\s*[:=]\s*['\"]?[^'\"\s,}]+",
+        # The key may be quoted, and the quotes escaped: a credential inside JSON, or
+        # inside JSON that is itself inside a string, is still a credential.
+        r"(access_token|refresh_token|id_token|api_key|client_secret|private_key|secret|password|token)"
+        r"\\*['\"]?\s*[:=]\s*\\*['\"]?[^'\"\s,}\\]+",
         re.IGNORECASE,
+    )
+    # Credentials recognisable by their own shape, wherever they sit and whatever names them.
+    _BARE_SECRET_PATTERN = re.compile(
+        r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----|"
+        r"\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}|"
+        r"\bsk-[A-Za-z0-9_-]{20,}|"
+        r"\bgh[pousr]_[A-Za-z0-9]{30,}|"
+        r"\bxox[abprs]-[A-Za-z0-9-]{10,}|"
+        r"\bya29\.[A-Za-z0-9_-]{20,}|"
+        r"\bAKIA[0-9A-Z]{16}\b",
+        re.DOTALL,
     )
 
     def _scrub(self, value: Any) -> Any:
@@ -230,7 +244,7 @@ class TraceManager:
         if isinstance(value, list):
             return [self._scrub(v) for v in value]
         if isinstance(value, str):
-            return self._SECRET_PATTERN.sub(r"\1\2=***", value)
+            return self._BARE_SECRET_PATTERN.sub("***", self._SECRET_PATTERN.sub(r"\1\2=***", value))
         return value
 
     # ──────────────────────────────────────────────────────────────────────
