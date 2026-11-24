@@ -397,12 +397,105 @@ class TestProviderIdentityAndContentAtoms:
             "text": "Introduction\nProblem\nSolution\n",
             "paragraph_count": 2,
             "content_length": 29,
+            "tabs": [{"id": None, "title": None, "content_length": 29}],
             "error": None,
         }
         assert calls == [(
             "GET", "https://docs.googleapis.com/v1/documents/doc-1",
-            {"provider": "google_drive"},
+            {"provider": "google_drive", "params": {"includeTabsContent": "true"}},
         )]
+
+    async def test_drive_get_document_reads_every_tab_with_its_tables_and_chips(self):
+        """Asked for one tab, the Docs API gives the first and says nothing of the rest:
+        meeting notes came back as their summary tab, without the transcript."""
+        with open(DRIVE_GET_DOCUMENT_ATOM, encoding="utf-8") as handle:
+            source = handle.read()
+        atom = read_contract(
+            source, system="google_drive", expected_name="google_drive_get_document",
+        ).atom
+
+        def paragraph(*runs):
+            return {"paragraph": {"elements": list(runs)}}
+
+        def text(words):
+            return {"textRun": {"content": words}}
+
+        async def nexus_call(method, url, **kwargs):
+            return {"ok": True, "body": "", "json": {
+                "title": "Standup notes",
+                "tabs": [
+                    {
+                        "tabProperties": {"tabId": "t.0", "title": "Notes"},
+                        "documentTab": {"body": {"content": [
+                            paragraph(text("Summary\n")),
+                            paragraph(
+                                text("Recording: "),
+                                {"richLink": {"richLinkProperties": {"title": "standup.mp4"}}},
+                                text(" by "),
+                                {"person": {"personProperties": {"name": "Sam Otieno"}}},
+                                text("\n"),
+                            ),
+                            {"table": {"tableRows": [{"tableCells": [
+                                {"content": [paragraph(text("Owner\n"))]},
+                                {"content": [paragraph(text("Sam\n"))]},
+                            ]}]}},
+                        ]}},
+                        "childTabs": [{
+                            "tabProperties": {"tabId": "t.2", "title": "Action items"},
+                            "documentTab": {"body": {"content": [paragraph(text("Ship it\n"))]}},
+                        }],
+                    },
+                    {
+                        "tabProperties": {"tabId": "t.1", "title": "Transcript"},
+                        "documentTab": {"body": {"content": [
+                            paragraph(text("Sam: we agreed to ship on Friday.\n")),
+                        ]}},
+                    },
+                ],
+            }}
+
+        async def read(**arguments):
+            namespace = {"nexus_call": nexus_call}
+            exec(  # noqa: S102 - the atom's own source, run as the sandbox runs it
+                f"{source}\n\n{invocation(atom, {'document_id': 'doc-1', **arguments})}", namespace
+            )
+            return await namespace["main"]()
+
+        notes = "Summary\nRecording: standup.mp4 by Sam Otieno\nOwner\nSam\n"
+        listed = [
+            {"id": "t.0", "title": "Notes", "content_length": len(notes.strip())},
+            {"id": "t.2", "title": "Action items", "content_length": 7},
+            {"id": "t.1", "title": "Transcript", "content_length": 33},
+        ]
+
+        # Asked for nothing in particular: where the document starts, and what else it holds.
+        first = await read()
+        assert first["success"] is True and first["text"] == notes
+        assert first["tabs"] == listed
+        assert first["note"] == (
+            "This is the first of 3 tabs, 'Notes'. Not included: 'Action items' (7 characters), "
+            "'Transcript' (33 characters). Pass tab=<title> for one of them, or tab='all'."
+        )
+
+        # One tab by its title, whatever its case, or by its id.
+        transcript = await read(tab="transcript")
+        assert transcript["text"] == "Sam: we agreed to ship on Friday.\n"
+        assert "note" not in transcript and transcript["tabs"] == listed
+        assert (await read(tab="t.2"))["text"] == "Ship it\n"
+
+        everything = await read(tab="all")
+        assert everything["text"] == (
+            "===== Tab: Notes =====\n" + notes + "\n"
+            "===== Tab: Action items =====\nShip it\n\n"
+            "===== Tab: Transcript =====\nSam: we agreed to ship on Friday.\n"
+        )
+        assert everything["paragraph_count"] == 6
+
+        missing = await read(tab="Appendix")
+        assert missing["success"] is False and missing["tabs"] == listed
+        assert missing["error"] == (
+            "No tab named 'Appendix'. Tabs: 'Notes', 'Action items', 'Transcript'"
+        )
 
     async def test_hubspot_contact_deals_reads_association_records(self):
         with open(HUBSPOT_CONTACT_DEALS_ATOM, encoding="utf-8") as handle:
