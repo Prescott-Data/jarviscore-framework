@@ -1953,7 +1953,14 @@ capability; if one fails, report what failed.
             # offered atom may do without the person's yes is the approval policy's to
             # say, call by call; offering it grants nothing.
             "notify": {"read", "write", "notify"},
-            "destructive": {"read", "destructive"},
+            # A step that deletes is offered everything: what a person calls removing is
+            # often two acts or a different one. Declining someone else's meeting is an
+            # answer that reaches its organiser ("notify"), not a deletion, and the atom
+            # that cancels sends the agent to it; replacing a thing is deleting it and
+            # creating its successor ("write"). Offered only "destructive" atoms, such a
+            # step had a tool that refused and nothing to do instead. As above, offering
+            # grants nothing: the approval policy decides call by call.
+            "destructive": {"read", "write", "notify", "destructive"},
             "final_response": {"read"},
         }.get(requested_effect)
         for entry in self.code_registry.get_functions_by_system(system):
