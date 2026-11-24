@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 
+from jarviscore.memory import athena_client
 from jarviscore.memory.athena_client import AthenaClient
 from jarviscore.memory import get_athena_client
 
@@ -453,3 +454,230 @@ async def test_erase_memory_raises_when_athena_did_not_erase():
         await client.erase_memory("acme", "u")
     with pytest.raises(ValueError):
         await client.erase_memory("")
+
+
+class TestAnAthenaThatDoesNotAnswerIsLeftAlone:
+    """Every call to an unreachable Athena waited out its limit, again for every turn of a
+    task. After a few failures in a row the address fails at once for a while."""
+
+    DEAD = "http://127.0.0.1:9"  # nothing listens: refused at once
+
+    @pytest.fixture(autouse=True)
+    def fresh_breakers(self):
+        athena_client._BREAKERS.clear()
+        yield
+        athena_client._BREAKERS.clear()
+
+    @pytest.mark.asyncio
+    async def test_after_three_failures_a_call_fails_without_being_made(self):
+        import httpx
+
+        client = AthenaClient(self.DEAD, tenant_id="t")
+        http = await client._http()
+        for _ in range(3):
+            with pytest.raises(httpx.ConnectError):
+                await http.get("/api/v1/health")
+        assert athena_client._breaker(self.DEAD).state == "open"
+        with pytest.raises(httpx.ConnectError, match="left alone"):
+            await http.get("/api/v1/health")
+        await client.close()
+
+    @pytest.mark.asyncio
+    async def test_the_breaker_is_the_address_s_not_one_client_s(self):
+        """A client is made for each piece of work: a breaker of its own would start
+        closed every time."""
+        first = AthenaClient(self.DEAD, tenant_id="t")
+        for _ in range(3):
+            assert await first.create_session("agent") is None
+        await first.close()
+
+        second = AthenaClient(self.DEAD, tenant_id="t")
+        http = await second._http()
+        import httpx
+
+        with pytest.raises(httpx.ConnectError, match="left alone"):
+            await http.get("/api/v1/health")
+        await second.close()
+
+    @pytest.mark.asyncio
+    async def test_one_call_is_let_through_after_the_cooldown_and_an_answer_closes_it(self):
+        breaker = athena_client._breaker(self.DEAD)
+        for _ in range(3):
+            breaker.record_failure()
+        assert not breaker.allows()
+        breaker.cooldown = 0.0
+        assert breaker.allows() and breaker.state == "probing"
+        breaker.record_success()
+        assert breaker.state == "closed"
+
+    def test_reaching_athena_has_a_shorter_limit_than_waiting_for_its_answer(self):
+        client = AthenaClient("http://athena.example", tenant_id="t", timeout=10.0)
+        assert client._connect_timeout == 3.0
+        assert AthenaClient("http://athena.example", timeout=2.0)._connect_timeout == 2.0
+
+
+class _Server:
+    """A local stand-in for Athena that answers as told: at once, late, 502, or never."""
+
+    def __init__(self):
+        self.mode, self.delay, self.requests = "ok", 0.0, 0
+
+    async def __aenter__(self):
+        import asyncio
+
+        async def handle(reader, writer):
+            await reader.readuntil(b"\r\n\r\n")
+            self.requests += 1
+            try:
+                if self.mode == "hang":
+                    await asyncio.sleep(30)
+                if self.delay:
+                    await asyncio.sleep(self.delay)
+                status = "502 Bad Gateway" if self.mode == "502" else "200 OK"
+                writer.write(f"HTTP/1.1 {status}\r\ncontent-type: application/json\r\n"
+                             "content-length: 2\r\nconnection: close\r\n\r\n{}".encode())
+                await writer.drain()
+            finally:
+                writer.close()
+
+        self._server = await asyncio.start_server(handle, "127.0.0.1", 0)
+        self.url = f"http://127.0.0.1:{self._server.sockets[0].getsockname()[1]}"
+        return self
+
+    async def __aexit__(self, *exc):
+        self._server.close()
+
+
+class TestTheBreakerHoldsInEveryWayAthenaCanFail:
+    @pytest.fixture(autouse=True)
+    def fresh_breakers(self):
+        athena_client._BREAKERS.clear()
+        yield
+        athena_client._BREAKERS.clear()
+
+    @staticmethod
+    async def client(server, timeout=0.3):
+        client = AthenaClient(server.url, tenant_id="t", timeout=timeout)
+        return client, await client._http(), athena_client._breaker(server.url)
+
+    @pytest.mark.asyncio
+    async def test_one_call_that_had_to_be_waited_out_opens_it(self):
+        """Athena behind a gateway that is up: the connection is made and nothing comes
+        back. Three such waits before opening would be three times the limit."""
+        import httpx
+
+        async with _Server() as server:
+            server.mode = "hang"
+            client, http, breaker = await self.client(server)
+            with pytest.raises(httpx.ReadTimeout):
+                await http.get("/api/v1/health")
+            assert breaker.state == "open"
+            with pytest.raises(httpx.ConnectError, match="left alone"):
+                await http.get("/api/v1/health")
+            assert server.requests == 1
+            await client.close()
+
+    @pytest.mark.asyncio
+    async def test_a_caller_that_gives_up_waiting_opens_it_too(self, monkeypatch):
+        """A caller may wait less than the client's own limit."""
+        import asyncio
+
+        monkeypatch.setattr(athena_client, "_GAVE_UP_AFTER", 0.05)
+        async with _Server() as server:
+            server.mode = "hang"
+            client, http, breaker = await self.client(server, timeout=5.0)
+            with pytest.raises(asyncio.TimeoutError):
+                await asyncio.wait_for(http.get("/api/v1/health"), 0.2)
+            assert breaker.state == "open"
+            await client.close()
+
+    @pytest.mark.asyncio
+    async def test_a_call_cancelled_before_it_was_waited_for_says_nothing_about_athena(self):
+        """A task cancelled for its own reasons (shutdown, a sibling that failed) while a
+        call is in flight has not found Athena slow."""
+        import asyncio
+
+        async with _Server() as server:
+            server.mode = "hang"
+            client, http, breaker = await self.client(server, timeout=5.0)
+            for _ in range(5):
+                call_ = asyncio.ensure_future(http.get("/api/v1/health"))
+                await asyncio.sleep(0.05)
+                call_.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await call_
+            assert breaker.state == "closed"
+            await client.close()
+
+    @pytest.mark.asyncio
+    async def test_a_gateway_saying_athena_is_unavailable_counts_and_so_does_a_late_answer(self):
+        async with _Server() as server:
+            client, http, breaker = await self.client(server)
+            server.mode = "502"
+            for _ in range(3):
+                assert (await http.get("/api/v1/health")).status_code == 502
+            assert breaker.state == "open"
+
+            athena_client._BREAKERS.clear()
+            await client.close()
+            client, http, breaker = await self.client(server)
+            server.mode, server.delay = "ok", 0.27  # answers, later than 0.8 of the limit
+            for _ in range(3):
+                assert (await http.get("/api/v1/health")).status_code == 200
+            assert breaker.state == "open"
+            await client.close()
+
+    @pytest.mark.asyncio
+    async def test_one_call_at_a_time_finds_out_and_each_failure_doubles_the_wait(self):
+        import asyncio
+
+        import httpx
+
+        async with _Server() as server:
+            server.mode = "hang"
+            client, http, breaker = await self.client(server)
+            breaker.cooldown = 0.05
+            with pytest.raises(httpx.ReadTimeout):
+                await http.get("/api/v1/health")
+            await asyncio.sleep(0.06)
+
+            results = await asyncio.gather(
+                *(http.get("/api/v1/health") for _ in range(5)), return_exceptions=True,
+            )
+            # Five asked at once after the cooldown: one was let through, four were refused.
+            assert sum(isinstance(r, httpx.ReadTimeout) for r in results) == 1
+            assert sum(isinstance(r, httpx.ConnectError) for r in results) == 4
+            assert server.requests == 2
+            assert breaker.cooldown == pytest.approx(0.1)
+            await client.close()
+
+    @pytest.mark.asyncio
+    async def test_an_answer_closes_it_and_the_wait_goes_back_to_what_it_was(self):
+        import asyncio
+
+        import httpx
+
+        async with _Server() as server:
+            server.mode = "hang"
+            client, http, breaker = await self.client(server)
+            breaker.cooldown = 0.05
+            with pytest.raises(httpx.ReadTimeout):
+                await http.get("/api/v1/health")
+            server.mode = "ok"
+            await asyncio.sleep(0.06)
+            assert (await http.get("/api/v1/health")).status_code == 200
+            assert breaker.state == "closed"
+            assert (await http.get("/api/v1/health")).status_code == 200
+            await client.close()
+
+    def test_a_probe_whose_outcome_was_never_recorded_does_not_shut_the_breaker_for_good(self):
+        from jarviscore.memory.delivery import CircuitBreaker
+
+        breaker = CircuitBreaker(threshold=1, cooldown=0.0)
+        breaker.record_failure()
+        assert breaker.allows()          # the probe is let through and never reports back
+        breaker.cooldown = 30.0
+        breaker._opened_at -= 60
+        assert not breaker.allows()      # others wait for it
+        breaker._probe_at -= 60
+        assert breaker.allows()          # until it has been gone a whole cooldown
