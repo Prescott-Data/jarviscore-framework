@@ -186,6 +186,52 @@ async def test_write_atom_executes_without_approval_and_retry_is_idempotent():
     agent._tool_execute_code.assert_awaited_once()
 
 
+@pytest.mark.asyncio
+async def test_a_retry_is_recognised_inside_its_own_work_and_not_across_others():
+    """The "already ran" record stops a retry repeating an effect: the same step
+    dispatched again, or another step of the same workflow making the same call. It does
+    not answer for a later, separate piece of work: asked on Tuesday to do again what was
+    done on Monday, the atom runs. Kept under the action alone, a second request to archive
+    a message that had come back was told it had already run, and nothing happened."""
+    atom = read_contract(
+        WRITE_SOURCE, system="google_calendar", expected_name="google_calendar_create_event",
+    ).atom
+    store = ExecutionStore()
+    event = {"summary": "Discovery Call", "start_datetime": "2026-09-10T13:00:00+03:00",
+             "end_datetime": "2026-09-10T13:30:00+03:00"}
+
+    def agent_in(workflow, step):
+        agent = CoderSubAgent.__new__(CoderSubAgent)
+        agent._atoms = {atom.name: atom}
+        agent._run_context = {"workflow_id": workflow, "step_id": step}
+        agent.code_registry = Registry()
+        agent.redis_store = store
+        agent._tool_execute_code = AsyncMock(
+            return_value={"status": "success", "data": {"event_id": f"evt-{workflow}"}})
+        return agent
+
+    monday = agent_in("monday", "book")
+    first = await monday._atom_tool(atom.name)(**event)
+    again = await monday._atom_tool(atom.name)(**event)
+    assert first == again
+    monday._tool_execute_code.assert_awaited_once()
+    # another step of the same work (a repaired plan re-issuing the write) is still a retry
+    repaired = agent_in("monday", "book-again")
+    assert await repaired._atom_tool(atom.name)(**event) == first
+    repaired._tool_execute_code.assert_not_awaited()
+    # a separate piece of work runs
+    tuesday = agent_in("tuesday", "book")
+    later = await tuesday._atom_tool(atom.name)(**event)
+    tuesday._tool_execute_code.assert_awaited_once()
+    assert later["data"] == {"event_id": "evt-tuesday"}
+    # work that names no workflow keeps the record under the action alone, as before
+    loose, loose_again = agent_in("", "a"), agent_in("", "b")
+    await loose._atom_tool(atom.name)(**event)
+    await loose_again._atom_tool(atom.name)(**event)
+    loose._tool_execute_code.assert_awaited_once()
+    loose_again._tool_execute_code.assert_not_awaited()
+
+
 OUTBOUND_ATOMS = [
     ("gmail", "gmail_send_email"),
     ("msgraph", "msgraph_send_email"),

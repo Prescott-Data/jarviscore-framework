@@ -2452,7 +2452,7 @@ capability; if one fails, report what failed.
                 )
                 if refusal is not None:
                     return refusal
-            prior = self._idempotent_result(action_id)
+            prior = self._idempotent_result(self._replay_key(action_id))
             if prior is not None:
                 if requirement.required:
                     approval.settle(
@@ -2496,7 +2496,7 @@ capability; if one fails, report what failed.
                 atom.policy.effect in {"write", "notify", "destructive"}
                 and result.get("status") == "success"
             ):
-                self._save_idempotent_result(action_id, result)
+                self._save_idempotent_result(self._replay_key(action_id), result)
             if requirement.required:
                 approval.settle(
                     self.redis_store,
@@ -2567,6 +2567,20 @@ capability; if one fails, report what failed.
             {"atom": atom.name, "identity": identity}, sort_keys=True, default=str
         ).encode()
         return hashlib.sha256(encoded).hexdigest()
+
+    def _replay_key(self, action_id: str) -> str:
+        """Where an atom's "already ran" record is kept: inside the piece of work it ran in.
+
+        The record exists so that a retry cannot repeat an effect: a step dispatched
+        again, a step resumed after an approval, a plan repaired around a failure. All of
+        those happen inside one workflow. Kept under the action alone, the record also
+        answered for every later piece of work that made the same call: archive a message,
+        see it come back, ask for it to be archived again a day later, and the second
+        request was told "already ran" and did nothing, for as long as the record lived.
+        Work with no workflow id keeps the record under the action, as before.
+        """
+        workflow = str(self._run_context.get("workflow_id") or "").strip()
+        return f"{workflow}:{action_id}" if workflow else action_id
 
     def _idempotent_result(self, action_id: str):
         store = self.redis_store
