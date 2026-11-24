@@ -225,6 +225,7 @@ Athena provides three-tier persistent memory (STM, MTM, and LTM graph) that span
 | `ATHENA_URL` | (none) | Athena API base URL, e.g. `http://localhost:8080` |
 | `ATHENA_TENANT_ID` | `default` | Tenant namespace for memory isolation across teams or environments |
 | `ATHENA_HTTP_TIMEOUT` | `10.0` | Seconds before an Athena HTTP call times out. Increase if your Athena instance is remote or under load. |
+| `ATHENA_CONNECT_TIMEOUT` | `3.0` | Seconds to reach Athena at all (TCP and TLS). After `ATHENA_BREAKER_THRESHOLD` failures in a row every call to that address fails at once for `ATHENA_BREAKER_COOLDOWN_SECONDS`. |
 | `ATHENA_SESSION_TTL_DAYS` | `30` | How long a session ID is cached in Redis before Athena re-issues it. |
 | `ATHENA_API_KEY` | — | Optional API key sent as `X-API-Key`. Keep it out of prompts and logs. |
 | `ATHENA_JWT_TOKEN` | — | Optional JWT sent as `X-JWT-Token` for tenant/user isolation. |

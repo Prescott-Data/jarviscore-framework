@@ -312,6 +312,7 @@ class Settings(BaseSettings):
     athena_url: Optional[str] = None           # ATHENA_URL — e.g. http://localhost:8080
     athena_tenant_id: str = "default"          # Namespace for multi-tenant Athena deployments
     athena_http_timeout: float = 10.0           # Seconds before Athena HTTP call times out
+    athena_connect_timeout: float = 3.0         # Seconds to reach Athena at all (TCP and TLS)
     athena_session_ttl_days: int = 30           # How long session_id is cached in Redis
     athena_api_key: Optional[str] = None         # Optional Athena X-API-Key credential
     athena_jwt_token: Optional[str] = None       # Optional Athena X-JWT-Token credential

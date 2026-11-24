@@ -56,6 +56,7 @@ class CircuitBreaker:
     _failures: int = field(default=0, init=False)
     _opened_at: Optional[float] = field(default=None, init=False)
     _probing: bool = field(default=False, init=False)
+    _probe_at: Optional[float] = field(default=None, init=False)
 
     @property
     def state(self) -> str:
@@ -66,10 +67,23 @@ class CircuitBreaker:
     def allows(self) -> bool:
         if self._opened_at is None:
             return True
-        if time.monotonic() - self._opened_at >= self.cooldown:
-            self._probing = True
-            return True
-        return False
+        now = time.monotonic()
+        if now - self._opened_at < self.cooldown:
+            return False
+        # Exactly one call finds out; the rest are refused until it has its answer.
+        # A probe whose outcome was never recorded (its caller was cancelled) is
+        # given up on after another cooldown, so the breaker cannot stay shut on it.
+        if self._probing and self._probe_at is not None and now - self._probe_at < self.cooldown:
+            return False
+        self._probing = True
+        self._probe_at = now
+        return True
+
+    def trip(self) -> None:
+        """Open now: the service was waited for and did not answer."""
+        self._failures = max(self._failures, self.threshold)
+        self._opened_at = time.monotonic()
+        self._probing = False
 
     def record_success(self) -> None:
         self._failures = 0

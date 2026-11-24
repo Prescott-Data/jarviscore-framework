@@ -37,14 +37,113 @@ Athena API reference (memory.proto → HTTP gateway):
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import logging
 import os
+import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote
 
+from .delivery import CircuitBreaker
+
 logger = logging.getLogger(__name__)
+
+
+#: One breaker per Athena address for the whole process. A client is made for each piece of
+#: work, so a breaker kept on the client would start closed every time and never open.
+_BREAKERS: Dict[str, CircuitBreaker] = {}
+
+
+def _breaker(base_url: str) -> CircuitBreaker:
+    breaker = _BREAKERS.get(base_url)
+    if breaker is None:
+        threshold, cooldown = 3, 30.0
+        try:
+            from jarviscore.config import settings
+
+            threshold = int(settings.athena_breaker_threshold)
+            cooldown = float(settings.athena_breaker_cooldown_seconds)
+        except Exception as exc:  # noqa: BLE001 - settings are optional here
+            logger.debug("[Athena] breaker settings not read, defaults used: %s", exc)
+        breaker = _BREAKERS[base_url] = CircuitBreaker(threshold=threshold, cooldown=cooldown)
+    return breaker
+
+
+#: The longest a breaker waits between tries of an Athena that stays unreachable.
+_MAX_COOLDOWN = 300.0
+#: A call cancelled after at least this many seconds in flight was given up on by a
+#: caller with a time limit of its own. A healthy Athena answers well inside it; a call
+#: cancelled sooner was cancelled for the caller's own reasons and says nothing of Athena.
+_GAVE_UP_AFTER = 1.0
+
+
+def _guarded_transport(breaker: CircuitBreaker, slow_after: float = 8.0):
+    """An httpx transport that stops calling an Athena that is not answering.
+
+    Every call to an unreachable Athena waited out its time limit: opening a session,
+    a recall, a write, each one again for every turn of a task. Here a call that had
+    to be waited out (a timeout, or a caller that gave up after waiting at least
+    ``_GAVE_UP_AFTER`` seconds) opens the breaker at once, since one such wait is
+    cost enough; a call cancelled sooner is not counted either way; quicker failures (a refused
+    connection, a gateway saying Athena is unavailable, an answer slower than
+    ``slow_after`` seconds) open it after the breaker's threshold in a row. While it
+    is open a call fails immediately. One call at a time is then let through to find
+    out whether Athena is back, and each one that fails doubles the wait before the
+    next, up to five minutes, so a long outage costs less the longer it lasts.
+    """
+    import httpx
+
+    base_cooldown = breaker.cooldown
+
+    class Guarded(httpx.AsyncBaseTransport):
+        def __init__(self) -> None:
+            self._inner = httpx.AsyncHTTPTransport()
+
+        async def handle_async_request(self, request):
+            if not breaker.allows():
+                raise httpx.ConnectError(
+                    "Athena has not been answering; it is left alone for a while", request=request,
+                )
+            probing = breaker.state == "probing"
+
+            def failed(waited: bool) -> None:
+                if waited:
+                    breaker.trip()
+                else:
+                    breaker.record_failure()
+                if probing:
+                    breaker.cooldown = min(breaker.cooldown * 2, _MAX_COOLDOWN)
+
+            started = time.monotonic()
+            try:
+                response = await self._inner.handle_async_request(request)
+            except httpx.TimeoutException:
+                failed(waited=True)
+                raise
+            except httpx.TransportError:
+                failed(waited=False)
+                raise
+            except asyncio.CancelledError:
+                # Cancelled after a real wait: the caller's own time limit ran out. Sooner,
+                # the task was cancelled for its own reasons (shutdown, a sibling that
+                # failed) and Athena was not found slow; nothing is recorded, and a probe
+                # left without an outcome is given up on by the breaker after a cooldown.
+                if time.monotonic() - started >= _GAVE_UP_AFTER:
+                    failed(waited=True)
+                raise
+            if response.status_code in (502, 503, 504) or time.monotonic() - started > slow_after:
+                failed(waited=False)
+            else:
+                breaker.record_success()
+                breaker.cooldown = base_cooldown
+            return response
+
+        async def aclose(self) -> None:
+            await self._inner.aclose()
+
+    return Guarded()
 
 
 class AthenaWriteRejected(RuntimeError):
@@ -84,10 +183,14 @@ class AthenaClient:
         api_key: Optional[str] = None,
         jwt_token: Optional[str] = None,
         session_ttl_days: int = 30,
+        connect_timeout: float = 3.0,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._tenant_id = tenant_id
         self._timeout = timeout
+        # Reaching Athena at all gets its own short limit: an address that does not
+        # answer should not cost what a slow search may.
+        self._connect_timeout = min(float(connect_timeout), float(timeout))
         self._api_key = api_key
         self._jwt_token = jwt_token
         self._session_ttl_seconds = max(1, int(session_ttl_days)) * 86400
@@ -119,6 +222,7 @@ class AthenaClient:
             base_url=url,
             tenant_id=tenant,
             timeout=timeout,
+            connect_timeout=float(os.getenv("ATHENA_CONNECT_TIMEOUT", "3.0")),
             api_key=os.getenv("ATHENA_API_KEY") or None,
             jwt_token=os.getenv("ATHENA_JWT_TOKEN") or None,
             session_ttl_days=int(os.getenv("ATHENA_SESSION_TTL_DAYS", "30")),
@@ -137,8 +241,11 @@ class AthenaClient:
                 headers["X-JWT-Token"] = self._jwt_token
             self._client = httpx.AsyncClient(
                 base_url=self._base_url,
-                timeout=self._timeout,
+                timeout=httpx.Timeout(self._timeout, connect=self._connect_timeout),
                 headers=headers,
+                transport=_guarded_transport(
+                    _breaker(self._base_url), slow_after=0.8 * float(self._timeout),
+                ),
             )
         return self._client
 
