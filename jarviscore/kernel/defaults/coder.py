@@ -17,6 +17,7 @@ Doctrine:
 """
 
 import ast
+import functools
 import json
 import logging
 import time
@@ -127,6 +128,60 @@ def _atom_parameters_schema(atom) -> Dict[str, Any]:
 
 
 _EFFECT_REDIRECT_LIMIT = 2
+
+#: The name of the function a shipped atom may define to say what one call does.
+CONSEQUENCE_HOOK = "_consequence"
+#: The most characters of a call's own consequence put before a person.
+_CONSEQUENCE_CHARS = 1500
+
+
+@functools.lru_cache(maxsize=256)
+def _consequence_hook(source: str):
+    """The ``_consequence(params)`` function atom source defines, or None.
+
+    An atom module only imports, defines and assigns constants (the contract refuses
+    anything else), so loading it runs no provider call and nothing of the atom itself.
+    """
+    if CONSEQUENCE_HOOK not in source:
+        return None
+    namespace: Dict[str, Any] = {}
+    try:
+        exec(compile(source, "<shipped atom>", "exec"), namespace)  # noqa: S102
+    except Exception as exc:  # noqa: BLE001 - an atom that does not load has no hook
+        logger.debug("Atom source did not load for its consequence hook: %s", exc)
+        return None
+    hook = namespace.get(CONSEQUENCE_HOOK)
+    return hook if callable(hook) else None
+
+
+def consequence_as_called(atom, code: Optional[str], params: Dict[str, Any]) -> str:
+    """What this call does, in the words put before the person asked to approve it.
+
+    ``ATOM_POLICY["consequence"]`` is one sentence for every call an atom can make
+    ("Sends one email."). The person deciding needs the call's own: who the email goes
+    to, which event is cancelled and whether it is the whole series. A shipped atom may
+    define ``_consequence(params)``, plain code that words the sentence from the call's
+    arguments, and that sentence is used for the call.
+
+    Only source identical to the file this package ships is run here, in the framework's
+    own process: an atom an agent wrote or repaired keeps the sentence it declares, and
+    so does a hook that fails or says nothing. The approval is bound to the arguments
+    whatever the wording, so a hook can describe a call and never widen it.
+    """
+    from jarviscore.execution import atom_contract
+
+    declared = atom.policy.consequence or atom.describe()
+    if not code or atom.policy.effect == "read" or atom_contract.shipped_source(atom) != code:
+        return declared
+    hook = _consequence_hook(code)
+    if hook is None:
+        return declared
+    try:
+        said = " ".join(str(hook(dict(params or {})) or "").split())
+    except Exception as exc:  # noqa: BLE001 - the atom itself will refuse such a call
+        logger.debug("%s could not word this call's consequence: %s", atom.name, exc)
+        return declared
+    return said[:_CONSEQUENCE_CHARS] or declared
 
 
 def _acting_for_now() -> Optional[str]:
@@ -2414,7 +2469,7 @@ capability; if one fails, report what failed.
                 system=atom.system,
                 params=dict(params),
                 description=atom.describe(),
-                consequence=atom.policy.consequence or atom.describe(),
+                consequence=consequence_as_called(atom, code, params),
             ) if requirement.required else None
             checks = None
             if pending is not None and not approval.asked(

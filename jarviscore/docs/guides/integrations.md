@@ -139,6 +139,20 @@ The required contract is:
 6. `ATOM_POLICY` declares effect, approval, consequence, and mutation identity.
 7. Provider failures are returned as structured results rather than hidden.
 
+`consequence` is one sentence for every call the atom can make. An atom shipped in
+the package may also define `_consequence(params)`, plain code that returns the
+sentence for one call from its arguments (who a message goes to, which event is
+cancelled). When a call waits for approval, that sentence is what the person is
+shown. It runs in the framework's process, so it is used only for source identical
+to the shipped file; an atom an agent wrote or repaired keeps the sentence it
+declares, and so does a hook that fails or returns nothing. The approval is bound to
+the call's arguments whatever the wording.
+
+```python
+def _consequence(params: dict) -> str:
+    return f'Moves the Linear issue {params.get("issue_id")} to a closed state.'
+```
+
 Validate the source before any live call:
 
 ```bash
